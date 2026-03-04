@@ -1,0 +1,23 @@
+# Build
+build/
+.pio/
+sdkconfig.old
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+dist/
+venv/
+.env

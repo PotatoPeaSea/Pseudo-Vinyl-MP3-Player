@@ -336,15 +336,18 @@ class PseudoVinylConverter:
         canvas.create_oval(cx-2, cy-2, cx+2, cy+2, fill=C["vinyl_black"], outline=C["vinyl_black"])
 
     def _draw_record_sleeve(self, canvas, cx, cy):
-        """Draw a record sleeve / folder icon."""
+        """Draw a record sleeve / folder icon, centered on cx, cy."""
+        s = 24  # half-size of sleeve
         # Sleeve (brown square)
-        canvas.create_rectangle(8, 8, 56, 56, fill=C["surface"], outline=C["border"], width=2)
+        canvas.create_rectangle(cx-s, cy-s, cx+s, cy+s, fill=C["surface"], outline=C["border"], width=2)
         # Record peeking out
-        canvas.create_oval(20, 14, 52, 46, fill=C["vinyl_black"], outline=C["border_light"])
+        r = 16
+        canvas.create_oval(cx-r, cy-r, cx+r, cy+r, fill=C["vinyl_black"], outline=C["border_light"])
         # Gold label on record
-        canvas.create_oval(32, 26, 40, 34, fill=C["accent"], outline=C["accent_dim"])
+        lr = 4
+        canvas.create_oval(cx-lr, cy-lr, cx+lr, cy+lr, fill=C["accent"], outline=C["accent_dim"])
         # Spindle
-        canvas.create_oval(35, 29, 37, 31, fill=C["vinyl_black"])
+        canvas.create_oval(cx-1, cy-1, cx+1, cy+1, fill=C["vinyl_black"])
 
     def _draw_ornament(self, parent):
         """Draw a decorative divider line."""

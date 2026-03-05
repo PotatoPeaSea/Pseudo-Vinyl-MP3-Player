@@ -3,6 +3,10 @@ build/
 .pio/
 sdkconfig.old
 
+# PyInstaller
+dist/
+*.spec
+
 # IDE
 .vscode/
 .idea/

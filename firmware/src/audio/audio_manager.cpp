@@ -56,13 +56,13 @@ static int getPrevIndex() {
 
 // ── Public API ──────────────────────────────────────────────
 
-void Audio::init() {
+void AudioMgr::init() {
     audio.setPinout(PIN_I2S_BCLK, PIN_I2S_LRCK, PIN_I2S_DOUT);
     audio.setVolume(volume);
     Serial.println("[Audio] I2S initialized (PCM5102)");
 }
 
-void Audio::loop() {
+void AudioMgr::loop() {
     audio.loop();
 
     // Auto-advance when song ends
@@ -78,7 +78,7 @@ void Audio::loop() {
     }
 }
 
-void Audio::setPlaylist(const std::vector<SongInfo> &songs) {
+void AudioMgr::setPlaylist(const std::vector<SongInfo> &songs) {
     playlist = songs;
     currentIdx = -1;
     playing = false;
@@ -88,7 +88,7 @@ void Audio::setPlaylist(const std::vector<SongInfo> &songs) {
     Serial.printf("[Audio] Playlist loaded (%d songs)\n", playlist.size());
 }
 
-void Audio::play(int index) {
+void AudioMgr::play(int index) {
     if (index < 0 || index >= (int)playlist.size()) return;
 
     currentIdx = index;
@@ -105,30 +105,30 @@ void Audio::play(int index) {
     }
 }
 
-void Audio::pause() {
+void AudioMgr::pause() {
     audio.pauseResume();
     playing = false;
     Serial.println("[Audio] Paused");
 }
 
-void Audio::resume() {
+void AudioMgr::resume() {
     audio.pauseResume();
     playing = true;
     Serial.println("[Audio] Resumed");
 }
 
-void Audio::stop() {
+void AudioMgr::stop() {
     audio.stopSong();
     playing = false;
     Serial.println("[Audio] Stopped");
 }
 
-void Audio::next() {
+void AudioMgr::next() {
     int n = getNextIndex();
     if (n >= 0) play(n);
 }
 
-void Audio::prev() {
+void AudioMgr::prev() {
     // If more than 3 seconds in, restart current song
     if (audio.getAudioCurrentTime() > 3) {
         play(currentIdx);
@@ -138,49 +138,49 @@ void Audio::prev() {
     }
 }
 
-void Audio::setVolume(int vol) {
+void AudioMgr::setVolume(int vol) {
     volume = constrain(vol, 0, MAX_VOLUME);
     audio.setVolume(volume);
 }
 
-int Audio::getVolume() {
+int AudioMgr::getVolume() {
     return volume;
 }
 
-void Audio::setPlayMode(PlayMode mode) {
+void AudioMgr::setPlayMode(PlayMode mode) {
     playMode = mode;
     if (mode == PlayMode::SHUFFLE) buildShuffleOrder();
     Serial.printf("[Audio] Play mode: %d\n", (int)mode);
 }
 
-PlayMode Audio::getPlayMode() {
+PlayMode AudioMgr::getPlayMode() {
     return playMode;
 }
 
-void Audio::cyclePlayMode() {
+void AudioMgr::cyclePlayMode() {
     int m = ((int)playMode + 1) % 4;
     setPlayMode((PlayMode)m);
 }
 
-bool Audio::isPlaying() {
+bool AudioMgr::isPlaying() {
     return playing;
 }
 
-int Audio::currentIndex() {
+int AudioMgr::currentIndex() {
     return currentIdx;
 }
 
-const SongInfo* Audio::currentSong() {
+const SongInfo* AudioMgr::currentSong() {
     if (currentIdx >= 0 && currentIdx < (int)playlist.size()) {
         return &playlist[currentIdx];
     }
     return nullptr;
 }
 
-uint32_t Audio::positionSec() {
+uint32_t AudioMgr::positionSec() {
     return audio.getAudioCurrentTime();
 }
 
-uint32_t Audio::durationSec() {
+uint32_t AudioMgr::durationSec() {
     return audio.getAudioFileDuration();
 }

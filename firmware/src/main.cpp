@@ -31,10 +31,10 @@ static Screen currentScreen = Screen::SONG_LIST;
 // ═══════════════════════════════════════════════════════════
 void audioTask(void *param) {
     Serial.println("[Task] Audio task started on Core 0");
-    Audio::init();
+    AudioMgr::init();
 
     for (;;) {
-        Audio::loop();
+        AudioMgr::loop();
         vTaskDelay(pdMS_TO_TICKS(1));   // Yield briefly
     }
 }
@@ -47,11 +47,11 @@ void uiTask(void *param) {
 
     for (;;) {
         // Update now-playing info
-        const SongInfo *current = Audio::currentSong();
-        UI::setNowPlaying(current, Audio::isPlaying());
-        UI::setProgress(Audio::positionSec(), Audio::durationSec());
-        UI::setVolume(Audio::getVolume(), MAX_VOLUME);
-        UI::setPlayModeIndicator(Audio::getPlayMode());
+        const SongInfo *current = AudioMgr::currentSong();
+        UI::setNowPlaying(current, AudioMgr::isPlaying());
+        UI::setProgress(AudioMgr::positionSec(), AudioMgr::durationSec());
+        UI::setVolume(AudioMgr::getVolume(), MAX_VOLUME);
+        UI::setPlayModeIndicator(AudioMgr::getPlayMode());
 
         // Spin vinyl + LVGL timers
         UI::update();
@@ -76,12 +76,12 @@ void inputTask(void *param) {
             switch (evt) {
                 case InputEvent::BTN_PLAY:
                     if (currentScreen == Screen::NOW_PLAYING) {
-                        if (Audio::isPlaying()) {
-                            Audio::pause();
-                        } else if (Audio::currentIndex() >= 0) {
-                            Audio::resume();
+                        if (AudioMgr::isPlaying()) {
+                            AudioMgr::pause();
+                        } else if (AudioMgr::currentIndex() >= 0) {
+                            AudioMgr::resume();
                         } else if (!songs.empty()) {
-                            Audio::play(0);
+                            AudioMgr::play(0);
                             UI::showScreen(Screen::NOW_PLAYING);
                             currentScreen = Screen::NOW_PLAYING;
                         }
@@ -97,7 +97,7 @@ void inputTask(void *param) {
 
                 case InputEvent::BTN_NEXT:
                     if (currentScreen == Screen::NOW_PLAYING) {
-                        Audio::next();
+                        AudioMgr::next();
                     } else {
                         // Navigate screens: Song List → Settings → Now Playing
                         if (currentScreen == Screen::SONG_LIST) {
@@ -115,7 +115,7 @@ void inputTask(void *param) {
 
                 case InputEvent::BTN_PREV:
                     if (currentScreen == Screen::NOW_PLAYING) {
-                        Audio::prev();
+                        AudioMgr::prev();
                     } else {
                         // Navigate screens backwards
                         if (currentScreen == Screen::SETTINGS) {
@@ -132,15 +132,15 @@ void inputTask(void *param) {
                     break;
 
                 case InputEvent::ENC_CW:
-                    Audio::setVolume(Audio::getVolume() + 1);
+                    AudioMgr::setVolume(AudioMgr::getVolume() + 1);
                     break;
 
                 case InputEvent::ENC_CCW:
-                    Audio::setVolume(Audio::getVolume() - 1);
+                    AudioMgr::setVolume(AudioMgr::getVolume() - 1);
                     break;
 
                 case InputEvent::ENC_PRESS:
-                    Audio::cyclePlayMode();
+                    AudioMgr::cyclePlayMode();
                     break;
 
                 default:
@@ -171,7 +171,7 @@ void setup() {
     // 2. SD Card
     if (Storage::init()) {
         songs = Storage::scanMusic("/");
-        Audio::setPlaylist(songs);
+        AudioMgr::setPlaylist(songs);
         UI::setSongList(songs);
         Serial.printf("[Boot] %d songs loaded\n", songs.size());
     } else {

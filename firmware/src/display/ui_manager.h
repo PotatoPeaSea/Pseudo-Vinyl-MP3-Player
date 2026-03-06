@@ -1,5 +1,7 @@
 #pragma once
 #include <Arduino.h>
+#include "../storage/sd_manager.h"
+#include "../audio/audio_manager.h"
 
 /**
  * UI Manager — LVGL screen navigation and updates

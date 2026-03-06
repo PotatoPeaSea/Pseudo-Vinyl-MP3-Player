@@ -17,7 +17,7 @@ enum class PlayMode : uint8_t {
     REPEAT_ONE,
 };
 
-namespace Audio {
+namespace AudioMgr {
     /// Initialize I2S output to PCM5102 DAC
     void init();
 

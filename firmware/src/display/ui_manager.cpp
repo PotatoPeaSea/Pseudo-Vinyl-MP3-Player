@@ -194,7 +194,7 @@ static void songListClickCb(lv_event_t *e) {
     lv_obj_t *btn = lv_event_get_target(e);
     uint32_t idx = (uint32_t)(uintptr_t)lv_event_get_user_data(e);
 
-    Audio::play(idx);
+    AudioMgr::play(idx);
     UI::showScreen(Screen::NOW_PLAYING);
 }
 
@@ -266,7 +266,7 @@ void UI::showScreen(Screen screen) {
 
 void UI::update() {
     // Spin the vinyl if playing
-    if (Audio::isPlaying()) {
+    if (AudioMgr::isPlaying()) {
         vinyl_angle = (vinyl_angle + VINYL_SPIN_SPEED_DEG) % 360;
         if (np_vinyl_img) {
             lv_obj_set_style_transform_angle(np_vinyl_img, vinyl_angle * 10, 0);

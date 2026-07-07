@@ -1,19 +1,22 @@
-# Product Requirements Document: ESP32-S3 Portable MP3 Player
+# Product Requirements Document: ESP32 Portable MP3 Player
 
-**Version:** 2.0  
-**Last Updated:** 2026-03-03
+**Version:** 3.0  
+**Last Updated:** 2026-07-06
+
+> [!NOTE]
+> **v3.0 board change:** Moved from ESP32-S3 to the **classic ESP32-WROOM-32**. The S3 has no Bluetooth Classic (BLE only), so the A2DP requirements (§3.4) were unimplementable on it — only the original ESP32 can act as an A2DP source. Trade-off: the WROOM-32 has **no PSRAM**, which drives the memory budget in §4.
 
 ---
 
 ## 1. Product Overview
 
-A battery-powered, handheld MP3 player built around the **ESP32-S3-WROOM-1 (N8R8)**. The device reads MP3 files from an SD card, displays a UI on a circular screen, and primarily streams audio wirelessly via **Bluetooth A2DP** to earbuds/speakers, with a secondary wired output option via the PCM5102 DAC. A signature visual feature is a **vinyl-style spinning album art** animation during playback.
+A battery-powered, handheld MP3 player built around the **ESP32-WROOM-32**. The device reads MP3 files from an SD card, displays a UI on a circular screen, and primarily streams audio wirelessly via **Bluetooth A2DP** to earbuds/speakers, with a secondary wired output option via the PCM5102 DAC. A signature visual feature is a **vinyl-style spinning album art** animation during playback.
 
 ### Development Phases
 
 | Phase | Description |
 |---|---|
-| **Phase 1 — Prototyping** | Test all modules on an ESP32-S3-WROOM-1 N8R8 dev board with breadboard wiring |
+| **Phase 1 — Prototyping** | Test all modules on an ESP32-WROOM-32 dev board with breadboard wiring |
 | **Phase 2 — Firmware** | Develop and stabilize firmware on the dev board |
 | **Phase 3 — PCB Design** | Design a custom PCB integrating all components |
 | **Phase 4 — Enclosure** | 3D print an enclosure for the final assembly |
@@ -24,7 +27,7 @@ A battery-powered, handheld MP3 player built around the **ESP32-S3-WROOM-1 (N8R8
 
 | Component | Model | Interface | Key Specs |
 |---|---|---|---|
-| MCU | ESP32-S3-WROOM-1 (N8R8) | — | Dual-core LX7 @ 240 MHz, **8 MB Flash, 8 MB PSRAM**, 512 KB SRAM, BT Classic + BLE + WiFi |
+| MCU | ESP32-WROOM-32 | — | Dual-core LX6 @ 240 MHz, **4 MB Flash, no PSRAM**, 520 KB SRAM, **BT Classic (A2DP!)** + BLE + WiFi |
 | DAC | PCM5102 | I2S | 32-bit, up to 384 kHz, 112 dB SNR, 3.5 mm jack (secondary output) |
 | Display | GC9A01 1.28" Round | SPI | 240×240 px, IPS TFT, 65K color, 3.3V |
 | Storage | SPI SD Card Reader | SPI | FAT32, stores MP3 files + pre-scaled album art |
@@ -35,7 +38,7 @@ A battery-powered, handheld MP3 player built around the **ESP32-S3-WROOM-1 (N8R8
 | Power Control | SPDT Slide Switch | — | Hard power-off between battery and system |
 
 > [!IMPORTANT]
-> **SPI Bus Sharing:** The GC9A01 display and SD card reader share MOSI, MISO, and SCK lines but require **separate CS pins**. Firmware must coordinate access (mutexed or alternating).
+> **SPI Buses:** The GC9A01 display runs on **VSPI** and the SD card reader on **HSPI** — two independent hardware buses, so no bus-sharing mutex is needed and display refresh can't stall audio reads.
 
 ---
 
@@ -109,7 +112,7 @@ A battery-powered, handheld MP3 player built around the **ESP32-S3-WROOM-1 (N8R8
 |---|---|---|
 | TOOL-01 | Python CLI tool that processes a directory of MP3 files | Must |
 | TOOL-02 | Extract embedded album art (JPEG/PNG) from ID3v2 APIC frames | Must |
-| TOOL-03 | Resize and crop to 240×240 pixels, circular mask optional | Must |
+| TOOL-03 | Resize and crop to 120×120 pixels (RAM cap on the no-PSRAM WROOM-32), circular mask optional | Must |
 | TOOL-04 | Convert to a firmware-friendly format: **RGB565 raw bitmap** (saves JPEG decode on device) or optimized JPEG | Must |
 | TOOL-05 | Save output alongside each MP3 with matching filename (e.g., `song.mp3` → `song.art`) | Must |
 | TOOL-06 | Skip files that already have an up-to-date `.art` file (based on modification time) | Should |
@@ -122,7 +125,7 @@ A battery-powered, handheld MP3 player built around the **ESP32-S3-WROOM-1 (N8R8
 
 | ID | Requirement | Notes |
 |---|---|---|
-| NFR-01 | **Memory Budget:** Leverage 8 MB PSRAM for MP3 decode buffers, album art bitmaps, and display framebuffer. Keep critical real-time paths in internal SRAM | Critical |
+| NFR-01 | **Memory Budget:** No PSRAM — everything lives in 520 KB internal SRAM alongside the ~150 KB BT Classic stack. Helix MP3 decode (~30 KB), LVGL draw buffers (2×14.4 KB), album art ≤120×120 RGB565 (28.8 KB), BT PCM ring buffer (16 KB) | Critical |
 | NFR-02 | **Display Frame Rate:** Vinyl spin animation at ≥20 FPS (target 30) | Smooth visual |
 | NFR-03 | **Audio Latency:** ≤200 ms end-to-end (decode → BT output) | Acceptable for music |
 | NFR-04 | **Boot Time:** Device ready to play within 5 seconds | User experience |
@@ -137,7 +140,7 @@ A battery-powered, handheld MP3 player built around the **ESP32-S3-WROOM-1 (N8R8
 graph TD
     BAT["LiPo Battery"] --> SW["Power Switch"]
     SW --> TP["TP4056 Charger"]
-    TP --> ESP["ESP32-S3-WROOM-1<br/>(N8R8)"]
+    TP --> ESP["ESP32-WROOM-32"]
     SD["SD Card<br/>(SPI)"] -->|MP3 + Art Files| ESP
     ESP -->|I2S Audio| DAC["PCM5102 DAC<br/>→ 3.5mm Jack"]
     ESP -->|BT A2DP| BT["Wireless<br/>Earbuds"]
@@ -146,30 +149,33 @@ graph TD
     ENC["KY-040 Encoder"] -->|GPIO| ESP
 ```
 
-### Pin Assignment (Prototype Wiring)
+### Pin Assignment (Prototype Wiring — ESP32-WROOM-32)
 
 | Signal | GPIO | Notes |
 |---|---|---|
-| **I2S BCK** | GPIO 7 | To PCM5102 BCK |
-| **I2S WS (LRCK)** | GPIO 15 | To PCM5102 LCK |
-| **I2S DOUT** | GPIO 16 | To PCM5102 DIN |
-| **SPI SCK** | GPIO 12 | Shared: Display + SD |
-| **SPI MOSI** | GPIO 11 | Shared: Display + SD |
-| **SPI MISO** | GPIO 13 | SD card only |
-| **Display CS** | GPIO 10 | GC9A01 chip select |
-| **Display DC** | GPIO 14 | GC9A01 data/command |
-| **Display RST** | GPIO 21 | GC9A01 reset |
-| **SD Card CS** | GPIO 18 | SD reader chip select |
-| **Encoder CLK** | GPIO 4 | KY-040 clock |
-| **Encoder DT** | GPIO 5 | KY-040 data |
-| **Encoder SW** | GPIO 6 | KY-040 push button |
-| **Btn Select/Play** | GPIO 1 | Internal pull-up |
-| **Btn Next** | GPIO 2 | Internal pull-up |
-| **Btn Previous** | GPIO 3 | Internal pull-up |
-| **Battery ADC** | GPIO 17 | Voltage divider from LiPo |
+| **Display SCK** | GPIO 18 | VSPI, IOMUX-native → 40 MHz |
+| **Display MOSI** | GPIO 23 | VSPI |
+| **Display CS** | GPIO 5 | GC9A01 chip select |
+| **Display DC** | GPIO 2 | Data/command (also onboard LED — harmless) |
+| **Display RST** | GPIO 4 | GC9A01 reset |
+| **Display BL** | GPIO 19 | Backlight |
+| **SD SCK** | GPIO 14 | HSPI |
+| **SD MOSI** | GPIO 13 | HSPI |
+| **SD MISO** | GPIO 35 | Input-only pin — ideal for MISO |
+| **SD CS** | GPIO 15 | SD reader chip select |
+| **I2S BCK** | GPIO 26 | To PCM5102 BCK |
+| **I2S WS (LRCK)** | GPIO 25 | To PCM5102 LCK |
+| **I2S DOUT** | GPIO 22 | To PCM5102 DIN |
+| **Encoder CLK** | GPIO 32 | KY-040 clock |
+| **Encoder DT** | GPIO 33 | KY-040 data |
+| **Encoder SW** | GPIO 27 | KY-040 push button (internal pull-up) |
+| **Btn Select/Play** | GPIO 16 | Internal pull-up |
+| **Btn Next** | GPIO 17 | Internal pull-up |
+| **Btn Previous** | GPIO 21 | Internal pull-up |
+| **Battery ADC** | GPIO 34 | **ADC1** — ADC2 is unusable while BT is on |
 
 > [!CAUTION]
-> GPIO 0, 45, 46 are strapping pins — **do not use** for general I/O. Pins reassigned from v1.0 to avoid GPIO 8 (onboard LED) and GPIO 9 (BOOT button) conflicts on the WROOM dev board.
+> WROOM-32 pin rules: GPIO 6–11 are flash (never use). GPIO 0 is a strapping pin. **GPIO 12 is deliberately unused** — many SD modules have pull-ups on every line, and a pull-up on GPIO 12 at boot selects 1.8 V flash voltage and bricks the boot. GPIO 34/35/36/39 are input-only with no internal pull-ups.
 
 ---
 
@@ -202,18 +208,19 @@ stateDiagram-v2
 
 | # | Risk | Mitigation |
 |---|---|---|
-| 1 | **Dual SPI contention** — Display refresh and SD reads share the bus | Use SPI mutex in FreeRTOS. Pre-buffer audio data to PSRAM to reduce SD access frequency during display updates |
-| 2 | **BT + MP3 decode CPU load** — Both are compute-heavy | Pin MP3 decode to Core 0 and BT stack to Core 1 (dual-core scheduling) |
-| 3 | **Album art too large for RAM** | Eliminated by desktop pre-scaler tool — art files are 240×240 RGB565 (~113 KB each), loaded directly to PSRAM |
-| 4 | **BT A2DP memory overhead** (~80 KB) | 8 MB PSRAM makes this manageable; disable WiFi stack at runtime to free internal SRAM |
+| 1 | **SPI contention** — Display refresh vs. SD reads | Eliminated: display on VSPI, SD on HSPI (independent hardware buses) |
+| 2 | **BT + MP3 decode CPU load** — Both are compute-heavy | Audio decode task pinned to Core 0 (with BT stack), UI/input on Core 1; BT sends from a 16 KB PCM ring buffer that absorbs jitter |
+| 3 | **Album art too large for RAM** | Desktop pre-scaler outputs ≤120×120 RGB565 (28.8 KB); firmware rejects larger files (`ART_MAX_SIDE`) |
+| 4 | **BT A2DP memory overhead** (~150 KB, no PSRAM) | WiFi stack never started; LVGL buffers trimmed to 30 rows; measured static RAM 18.4% at build |
 | 5 | **SD card hot-removal** | Detect via card-detect pin (if available) or handle SPI errors gracefully. Pause playback on removal |
+| 6 | **Non-44.1 kHz MP3s over BT** — A2DP link is fixed at 44.1 kHz | Files at other sample rates play off-speed on BT (fine on wired). Mitigate by re-encoding, or add a resampler later |
 
 ---
 
 ## 8. Desktop Album Art Pre-Scaler — Detailed Spec
 
 ### Overview
-A Python CLI tool that users run on their PC **before loading MP3s onto the SD card**. It extracts embedded album art, resizes to 240×240, and saves in a device-friendly format.
+A Python CLI tool that users run on their PC **before loading MP3s onto the SD card**. It extracts embedded album art, resizes to 120×120 (default, configurable with `--size`), and saves in a device-friendly format.
 
 ### Usage
 ```bash
@@ -223,8 +230,8 @@ python prescale_art.py /path/to/music/folder
 ### Behavior
 1. Recursively walk the input directory for `.mp3` files
 2. For each MP3, extract the first `APIC` (attached picture) frame from ID3v2 tags
-3. Resize/crop to 240×240 pixels (center-crop if non-square)
-4. Convert to **RGB565 raw bitmap** (115,200 bytes) — no JPEG decode needed on device
+3. Resize/crop to 120×120 pixels (center-crop if non-square)
+4. Convert to **RGB565 raw bitmap** (28,800 bytes, big-endian to match `LV_COLOR_16_SWAP`) — no JPEG decode needed on device
 5. Save as `<original_filename>.art` in the same directory
 6. Skip if `.art` file exists and is newer than the `.mp3`
 7. Print summary: processed / skipped / failed counts

@@ -14,7 +14,7 @@ struct SongInfo {
 };
 
 namespace Storage {
-    /// Initialize SD card on SPI3
+    /// Initialize SD card on HSPI
     bool init();
 
     /// Check if SD card is mounted

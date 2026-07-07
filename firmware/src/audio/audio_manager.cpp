@@ -1,14 +1,61 @@
 #include "audio_manager.h"
 #include "../config.h"
-#include <Audio.h>   // ESP32-audioI2S by schreibfaul1
+#include "../bluetooth/bt_manager.h"
+#include <SPI.h>
+#include <SD.h>
+#include <Preferences.h>
+#include "AudioTools.h"
+#include "AudioTools/AudioCodecs/CodecMP3Helix.h"
+
+// ── Output plumbing ─────────────────────────────────────────
+//
+//   SD File → StreamCopy → EncodedAudioStream(helix) → meter →
+//     VolumeStream → { I2SStream | BtMgr ring buffer }
+
+// Forwards PCM into the Bluetooth ring buffer
+class BtPrint : public Print {
+public:
+    size_t write(uint8_t c) override { return write(&c, 1); }
+    size_t write(const uint8_t *data, size_t len) override {
+        return BtMgr::writeAudio(data, len);
+    }
+};
+
+// Counts decoded PCM bytes for the position/duration estimate
+class MeterPrint : public Print {
+public:
+    Print *out = nullptr;
+    volatile uint64_t bytes = 0;
+    size_t write(uint8_t c) override { return write(&c, 1); }
+    size_t write(const uint8_t *data, size_t len) override {
+        if (!out) return len;
+        size_t written = out->write(data, len);
+        bytes += written;
+        return written;
+    }
+};
 
 // ── Static state ────────────────────────────────────────────
-static Audio audio;
+static audio_tools::I2SStream i2sOut;
+static BtPrint btOut;
+static audio_tools::VolumeStream volumeOut;
+static MeterPrint meter;
+static audio_tools::MP3DecoderHelix helix;
+static audio_tools::EncodedAudioStream decoder(&meter, &helix);
+static audio_tools::StreamCopy copier;
+static File curFile;
+static size_t curFileSize = 0;
+
+static Preferences audioPrefs;
+
 static std::vector<SongInfo> playlist;
 static int currentIdx = -1;
 static bool playing = false;
 static PlayMode playMode = PlayMode::NORMAL;
+static OutputMode outputMode = OutputMode::BLUETOOTH;
 static int volume = DEFAULT_VOLUME;
+
+static audio_tools::AudioInfo lastInfo(44100, 2, 16);
 
 // Shuffle order
 static std::vector<int> shuffleOrder;
@@ -54,24 +101,84 @@ static int getPrevIndex() {
     return currentIdx - 1;
 }
 
+// ── Pipeline helpers ────────────────────────────────────────
+
+static void applyVolume() {
+    // Perceptual-ish curve: square of the linear knob position
+    float f = (float)volume / MAX_VOLUME;
+    volumeOut.setVolume(f * f);
+}
+
+static void applyOutputRouting() {
+    if (outputMode == OutputMode::WIRED) {
+        BtMgr::stop();
+        auto cfg = i2sOut.defaultConfig(TX_MODE);
+        cfg.pin_bck = PIN_I2S_BCLK;
+        cfg.pin_ws = PIN_I2S_LRCK;
+        cfg.pin_data = PIN_I2S_DOUT;
+        cfg.copyFrom(lastInfo);
+        i2sOut.begin(cfg);
+        volumeOut.setOutput(i2sOut);
+        Serial.println("[Audio] Output: wired I2S (PCM5102)");
+    } else {
+        i2sOut.end();
+        volumeOut.setOutput(btOut);
+        BtMgr::start();
+        Serial.println("[Audio] Output: Bluetooth A2DP");
+    }
+}
+
+static void closePipeline() {
+    playing = false;
+    if (curFile) curFile.close();
+}
+
 // ── Public API ──────────────────────────────────────────────
 
 void AudioMgr::init() {
-    audio.setPinout(PIN_I2S_BCLK, PIN_I2S_LRCK, PIN_I2S_DOUT);
-    audio.setVolume(volume);
-    Serial.println("[Audio] I2S initialized (PCM5102)");
+    audioPrefs.begin("audiocfg", false);
+    outputMode = (OutputMode)audioPrefs.getUChar("output", (uint8_t)OutputMode::BLUETOOTH);
+    volume = audioPrefs.getUChar("volume", DEFAULT_VOLUME);
+
+    auto vcfg = volumeOut.defaultConfig();
+    vcfg.copyFrom(lastInfo);
+    volumeOut.begin(vcfg);
+    applyVolume();
+
+    applyOutputRouting();
+    Serial.println("[Audio] Pipeline initialized (helix MP3)");
 }
 
 void AudioMgr::loop() {
-    audio.loop();
+    if (!playing) return;
 
-    // Auto-advance when song ends
-    if (playing && !audio.isRunning()) {
-        int next = getNextIndex();
-        if (next >= 0) {
-            play(next);
+    // In BT mode with no sink connected, hold playback instead of
+    // racing through the file (BT writes would be dropped)
+    if (outputMode == OutputMode::BLUETOOTH && !BtMgr::isConnected()) {
+        vTaskDelay(pdMS_TO_TICKS(50));
+        return;
+    }
+
+    // Propagate decoder format changes (sample rate etc.) downstream.
+    // Note: A2DP is fixed 44.1kHz — non-44.1k files play off-speed on BT.
+    audio_tools::AudioInfo info = helix.audioInfo();
+    if (info.sample_rate != 0 && info != lastInfo) {
+        lastInfo = info;
+        volumeOut.setAudioInfo(info);
+        if (outputMode == OutputMode::WIRED) {
+            i2sOut.setAudioInfo(info);
+        }
+        Serial.printf("[Audio] Format: %d Hz, %d ch\n", info.sample_rate, info.channels);
+    }
+
+    size_t copied = copier.copy();
+    if (copied == 0 && curFile && curFile.available() == 0) {
+        // Track finished — auto-advance
+        int nextIdx = getNextIndex();
+        if (nextIdx >= 0) {
+            play(nextIdx);
         } else {
-            playing = false;
+            closePipeline();
             currentIdx = -1;
             Serial.println("[Audio] Playlist finished");
         }
@@ -91,35 +198,38 @@ void AudioMgr::setPlaylist(const std::vector<SongInfo> &songs) {
 void AudioMgr::play(int index) {
     if (index < 0 || index >= (int)playlist.size()) return;
 
+    closePipeline();
     currentIdx = index;
     const SongInfo &song = playlist[currentIdx];
 
-    // ESP32-audioI2S plays directly from SD
-    bool ok = audio.connecttoFS(SD, song.filepath.c_str());
-    if (ok) {
-        playing = true;
-        Serial.printf("[Audio] Playing [%d]: %s\n", currentIdx, song.title.c_str());
-    } else {
+    curFile = SD.open(song.filepath.c_str(), FILE_READ);
+    if (!curFile) {
         Serial.printf("[Audio] FAILED to open: %s\n", song.filepath.c_str());
-        playing = false;
+        return;
     }
+    curFileSize = curFile.size();
+    meter.bytes = 0;
+
+    decoder.begin();
+    copier.begin(decoder, curFile);
+    playing = true;
+    Serial.printf("[Audio] Playing [%d]: %s\n", currentIdx, song.title.c_str());
 }
 
 void AudioMgr::pause() {
-    audio.pauseResume();
     playing = false;
     Serial.println("[Audio] Paused");
 }
 
 void AudioMgr::resume() {
-    audio.pauseResume();
-    playing = true;
-    Serial.println("[Audio] Resumed");
+    if (curFile) {
+        playing = true;
+        Serial.println("[Audio] Resumed");
+    }
 }
 
 void AudioMgr::stop() {
-    audio.stopSong();
-    playing = false;
+    closePipeline();
     Serial.println("[Audio] Stopped");
 }
 
@@ -130,7 +240,7 @@ void AudioMgr::next() {
 
 void AudioMgr::prev() {
     // If more than 3 seconds in, restart current song
-    if (audio.getAudioCurrentTime() > 3) {
+    if (positionSec() > 3) {
         play(currentIdx);
     } else {
         int p = getPrevIndex();
@@ -138,9 +248,29 @@ void AudioMgr::prev() {
     }
 }
 
+void AudioMgr::setOutputMode(OutputMode mode) {
+    if (mode == outputMode) return;
+    bool wasPlaying = playing;
+    int resumeIdx = currentIdx;
+    closePipeline();
+
+    outputMode = mode;
+    audioPrefs.putUChar("output", (uint8_t)mode);
+    applyOutputRouting();
+
+    if (wasPlaying && resumeIdx >= 0) {
+        play(resumeIdx);
+    }
+}
+
+OutputMode AudioMgr::getOutputMode() {
+    return outputMode;
+}
+
 void AudioMgr::setVolume(int vol) {
     volume = constrain(vol, 0, MAX_VOLUME);
-    audio.setVolume(volume);
+    audioPrefs.putUChar("volume", volume);
+    applyVolume();
 }
 
 int AudioMgr::getVolume() {
@@ -178,9 +308,16 @@ const SongInfo* AudioMgr::currentSong() {
 }
 
 uint32_t AudioMgr::positionSec() {
-    return audio.getAudioCurrentTime();
+    uint32_t byteRate = lastInfo.sample_rate * lastInfo.channels * 2;
+    if (byteRate == 0) return 0;
+    return meter.bytes / byteRate;
 }
 
 uint32_t AudioMgr::durationSec() {
-    return audio.getAudioFileDuration();
+    // Scale elapsed time by compressed bytes consumed vs. file size —
+    // exact for CBR, converges quickly for VBR
+    if (!curFile || curFileSize == 0) return 0;
+    size_t consumed = curFile.position();
+    if (consumed == 0) return 0;
+    return (uint64_t)positionSec() * curFileSize / consumed;
 }

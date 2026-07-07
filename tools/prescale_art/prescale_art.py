@@ -2,12 +2,17 @@
 """
 Pseudo Vinyl MP3 Player — Album Art Pre-Scaler
 
-Extracts embedded album art from MP3 files, resizes to 240x240,
+Extracts embedded album art from MP3 files, resizes to 120x120,
 and converts to RGB565 raw bitmap (.art) for direct loading on
-the ESP32-S3 GC9A01 display.
+the ESP32 display.
+
+The 120px default matches the firmware's ART_MAX_SIDE — the
+ESP32-WROOM-32 has no PSRAM, so larger art won't fit in RAM
+alongside the Bluetooth stack and is rejected by the device.
 
 Usage:
     python prescale_art.py /path/to/music
+    python prescale_art.py /path/to/music --size 96
     python prescale_art.py /path/to/music --format jpeg --quality 85
     python prescale_art.py /path/to/music --force
 """
@@ -35,7 +40,8 @@ except ImportError:
 
 # ── Constants ────────────────────────────────────────────────────────────────
 
-DISPLAY_SIZE = 240
+# Must not exceed ART_MAX_SIDE in firmware/src/config.h (no PSRAM on WROOM-32)
+DEFAULT_ART_SIZE = 120
 ART_EXTENSION = ".art"
 SUPPORTED_FORMATS = ("rgb565", "jpeg")
 
@@ -91,7 +97,7 @@ def extract_album_art(mp3_path: Path) -> bytes | None:
 
 # ── Image Processing ─────────────────────────────────────────────────────────
 
-def resize_and_crop(image_data: bytes, size: int = DISPLAY_SIZE) -> Image.Image:
+def resize_and_crop(image_data: bytes, size: int = DEFAULT_ART_SIZE) -> Image.Image:
     """
     Resize an image to fit within a square, center-cropping if needed.
     Returns a PIL Image of exactly size×size pixels.
@@ -131,6 +137,7 @@ def process_file(
     output_format: str = "rgb565",
     jpeg_quality: int = 85,
     force: bool = False,
+    size: int = DEFAULT_ART_SIZE,
 ) -> str:
     """
     Process a single MP3 file.
@@ -152,7 +159,7 @@ def process_file(
 
     try:
         # Resize and crop
-        img = resize_and_crop(image_data)
+        img = resize_and_crop(image_data, size)
 
         # Convert and save
         if output_format == "rgb565":
@@ -183,7 +190,7 @@ def print_progress_bar(current: int, total: int, width: int = 40):
 def main():
     parser = argparse.ArgumentParser(
         description="Pseudo Vinyl MP3 Player — Album Art Pre-Scaler",
-        epilog="Processes MP3 files and generates 240x240 art files for the ESP32 display.",
+        epilog="Processes MP3 files and generates 120x120 art files for the ESP32 display.",
     )
     parser.add_argument(
         "directory",
@@ -207,8 +214,22 @@ def main():
         action="store_true",
         help="Force re-processing even if .art file is up-to-date",
     )
+    parser.add_argument(
+        "--size",
+        type=int,
+        default=DEFAULT_ART_SIZE,
+        help=f"Output side length in pixels. Default: {DEFAULT_ART_SIZE} "
+             "(firmware rejects art larger than 120)",
+    )
 
     args = parser.parse_args()
+
+    if args.size < 16 or args.size > 240:
+        print("ERROR: --size must be between 16 and 240.")
+        sys.exit(1)
+    if args.size > 120:
+        print("WARNING: sizes above 120 exceed the firmware's ART_MAX_SIDE "
+              "and will be ignored by the device.")
 
     music_dir = Path(args.directory).resolve()
     if not music_dir.is_dir():
@@ -228,7 +249,7 @@ def main():
     print(f"  MP3 files : {len(mp3_files)}")
     print(f"  Format    : {args.format.upper()}", end="")
     if args.format == "rgb565":
-        print(f" ({DISPLAY_SIZE}×{DISPLAY_SIZE} = {DISPLAY_SIZE*DISPLAY_SIZE*2:,} bytes/file)")
+        print(f" ({args.size}×{args.size} = {args.size*args.size*2:,} bytes/file)")
     else:
         print(f" (quality={args.quality})")
     print()
@@ -238,7 +259,7 @@ def main():
     start_time = time.time()
 
     for i, mp3_path in enumerate(mp3_files):
-        result = process_file(mp3_path, args.format, args.quality, args.force)
+        result = process_file(mp3_path, args.format, args.quality, args.force, args.size)
         stats[result] += 1
         print_progress_bar(i + 1, len(mp3_files))
 

@@ -3,11 +3,12 @@
 #include "../storage/sd_manager.h"
 
 /**
- * Audio Manager — MP3 decoding + I2S output
+ * Audio Manager — MP3 decode + switchable output
  *
- * Uses ESP32-audioI2S library (schreibfaul1) for decode + playback.
- * Architecture: audio output goes through an abstract interface
- * so Bluetooth A2DP can be swapped in later.
+ * Decode: helix MP3 (arduino-audio-tools) — runs from internal SRAM,
+ *         no PSRAM needed (ESP32-audioI2S 3.x required PSRAM).
+ * Output: Bluetooth A2DP (default) via BtMgr ring buffer,
+ *         or wired I2S to the PCM5102 DAC.
  */
 
 enum class PlayMode : uint8_t {
@@ -17,8 +18,13 @@ enum class PlayMode : uint8_t {
     REPEAT_ONE,
 };
 
+enum class OutputMode : uint8_t {
+    BLUETOOTH = 0,
+    WIRED,
+};
+
 namespace AudioMgr {
-    /// Initialize I2S output to PCM5102 DAC
+    /// Initialize pipeline + restore output mode from NVS
     void init();
 
     /// Must be called frequently from the audio task to feed the decoder
@@ -35,6 +41,10 @@ namespace AudioMgr {
     void next();
     void prev();
 
+    /// Output routing (persisted to NVS)
+    void setOutputMode(OutputMode mode);
+    OutputMode getOutputMode();
+
     /// Volume (0-21)
     void setVolume(int vol);
     int  getVolume();
@@ -49,5 +59,5 @@ namespace AudioMgr {
     int  currentIndex();
     const SongInfo* currentSong();
     uint32_t positionSec();     // Current position in seconds
-    uint32_t durationSec();     // Total duration in seconds
+    uint32_t durationSec();     // Estimated duration (exact for CBR)
 }

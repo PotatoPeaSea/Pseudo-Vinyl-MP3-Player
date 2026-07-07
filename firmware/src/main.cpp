@@ -1,21 +1,30 @@
 /**
  * Pseudo Vinyl MP3 Player — Firmware
+ * Board: ESP32-WROOM-32 (classic ESP32, BT Classic A2DP source)
  *
  * Entry point: initializes all peripherals and spawns FreeRTOS tasks.
  *
- * Task layout (dual-core ESP32-S3):
- *   Core 0: audio_task   — MP3 decode + I2S output (high priority)
+ * Task layout (dual-core):
+ *   Core 0: audio_task   — MP3 decode + output feed (BT stack also lives here)
  *   Core 1: ui_task      — LVGL display refresh (~60fps)
  *   Core 1: input_task   — Button/encoder polling (5ms)
+ *
+ * Controls:
+ *   Now Playing: PLAY=play/pause, NEXT/PREV=track, encoder=volume,
+ *                encoder press=cycle play mode
+ *   Menus:       encoder=move focus, PLAY=select, NEXT/PREV=switch screen,
+ *                encoder press=back
  */
 
 #include <Arduino.h>
+#include <lvgl.h>   // LV_KEY_* codes for UI::sendKey
 #include "config.h"
 #include "display/display_manager.h"
 #include "display/ui_manager.h"
 #include "input/input_manager.h"
 #include "storage/sd_manager.h"
 #include "audio/audio_manager.h"
+#include "bluetooth/bt_manager.h"
 
 // ── Task Handles ────────────────────────────────────────────
 static TaskHandle_t audioTaskHandle = nullptr;
@@ -24,14 +33,12 @@ static TaskHandle_t inputTaskHandle = nullptr;
 
 // ── Song library (shared state) ─────────────────────────────
 static std::vector<SongInfo> songs;
-static Screen currentScreen = Screen::SONG_LIST;
 
 // ═══════════════════════════════════════════════════════════
-// AUDIO TASK (Core 0) — MP3 decode + I2S output
+// AUDIO TASK (Core 0) — MP3 decode + output feed
 // ═══════════════════════════════════════════════════════════
 void audioTask(void *param) {
     Serial.println("[Task] Audio task started on Core 0");
-    AudioMgr::init();
 
     for (;;) {
         AudioMgr::loop();
@@ -45,6 +52,9 @@ void audioTask(void *param) {
 void uiTask(void *param) {
     Serial.println("[Task] UI task started on Core 1");
 
+    bool lastBtConnected = false;
+    uint32_t lastBtPoll = 0;
+
     for (;;) {
         // Update now-playing info
         const SongInfo *current = AudioMgr::currentSong();
@@ -52,6 +62,23 @@ void uiTask(void *param) {
         UI::setProgress(AudioMgr::positionSec(), AudioMgr::durationSec());
         UI::setVolume(AudioMgr::getVolume(), MAX_VOLUME);
         UI::setPlayModeIndicator(AudioMgr::getPlayMode());
+
+        // Bluetooth state → UI (poll a few times a second, not every frame)
+        uint32_t now = millis();
+        if (now - lastBtPoll > 250) {
+            lastBtPoll = now;
+
+            if (BtMgr::scanListChanged()) {
+                UI::setBtDevices(BtMgr::scanResults());
+            }
+
+            bool conn = BtMgr::isConnected();
+            if (conn != lastBtConnected) {
+                lastBtConnected = conn;
+                UI::setBtStatus(conn ? ("Connected: " + BtMgr::connectedName())
+                                     : (BtMgr::isStarted() ? "Searching..." : "Off (wired mode)"));
+            }
+        }
 
         // Spin vinyl + LVGL timers
         UI::update();
@@ -64,6 +91,20 @@ void uiTask(void *param) {
 // ═══════════════════════════════════════════════════════════
 // INPUT TASK (Core 1) — Buttons + encoder → events
 // ═══════════════════════════════════════════════════════════
+static void handleMenuScreenCycle(bool forward) {
+    // Menu screen order: SONG_LIST → SETTINGS → BLUETOOTH → NOW_PLAYING
+    static const Screen order[] = {
+        Screen::SONG_LIST, Screen::SETTINGS, Screen::BLUETOOTH, Screen::NOW_PLAYING
+    };
+    Screen cur = UI::activeScreen();
+    int idx = 0;
+    for (int i = 0; i < 4; i++) {
+        if (order[i] == cur) { idx = i; break; }
+    }
+    idx = (idx + (forward ? 1 : 3)) % 4;
+    UI::showScreen(order[idx]);
+}
+
 void inputTask(void *param) {
     Serial.println("[Task] Input task started on Core 1");
 
@@ -72,75 +113,66 @@ void inputTask(void *param) {
 
         while (Input::hasEvent()) {
             InputEvent evt = Input::getEvent();
+            Screen screen = UI::activeScreen();
+            bool onNowPlaying = (screen == Screen::NOW_PLAYING);
 
             switch (evt) {
                 case InputEvent::BTN_PLAY:
-                    if (currentScreen == Screen::NOW_PLAYING) {
+                    if (onNowPlaying) {
                         if (AudioMgr::isPlaying()) {
                             AudioMgr::pause();
                         } else if (AudioMgr::currentIndex() >= 0) {
                             AudioMgr::resume();
                         } else if (!songs.empty()) {
                             AudioMgr::play(0);
-                            UI::showScreen(Screen::NOW_PLAYING);
-                            currentScreen = Screen::NOW_PLAYING;
                         }
-                    } else if (currentScreen == Screen::SONG_LIST) {
-                        // Toggle to Now Playing
-                        UI::showScreen(Screen::NOW_PLAYING);
-                        currentScreen = Screen::NOW_PLAYING;
-                    } else if (currentScreen == Screen::SETTINGS) {
-                        UI::showScreen(Screen::SONG_LIST);
-                        currentScreen = Screen::SONG_LIST;
+                    } else {
+                        // Select focused item in menus
+                        UI::sendKey(LV_KEY_ENTER);
                     }
                     break;
 
                 case InputEvent::BTN_NEXT:
-                    if (currentScreen == Screen::NOW_PLAYING) {
+                    if (onNowPlaying) {
                         AudioMgr::next();
                     } else {
-                        // Navigate screens: Song List → Settings → Now Playing
-                        if (currentScreen == Screen::SONG_LIST) {
-                            UI::showScreen(Screen::SETTINGS);
-                            currentScreen = Screen::SETTINGS;
-                        } else if (currentScreen == Screen::SETTINGS) {
-                            UI::showScreen(Screen::NOW_PLAYING);
-                            currentScreen = Screen::NOW_PLAYING;
-                        } else {
-                            UI::showScreen(Screen::SONG_LIST);
-                            currentScreen = Screen::SONG_LIST;
-                        }
+                        handleMenuScreenCycle(true);
                     }
                     break;
 
                 case InputEvent::BTN_PREV:
-                    if (currentScreen == Screen::NOW_PLAYING) {
+                    if (onNowPlaying) {
                         AudioMgr::prev();
                     } else {
-                        // Navigate screens backwards
-                        if (currentScreen == Screen::SETTINGS) {
-                            UI::showScreen(Screen::SONG_LIST);
-                            currentScreen = Screen::SONG_LIST;
-                        } else if (currentScreen == Screen::SONG_LIST) {
-                            UI::showScreen(Screen::NOW_PLAYING);
-                            currentScreen = Screen::NOW_PLAYING;
-                        } else {
-                            UI::showScreen(Screen::SETTINGS);
-                            currentScreen = Screen::SETTINGS;
-                        }
+                        handleMenuScreenCycle(false);
                     }
                     break;
 
                 case InputEvent::ENC_CW:
-                    AudioMgr::setVolume(AudioMgr::getVolume() + 1);
+                    if (onNowPlaying) {
+                        AudioMgr::setVolume(AudioMgr::getVolume() + 1);
+                    } else {
+                        UI::sendKey(LV_KEY_NEXT);
+                    }
                     break;
 
                 case InputEvent::ENC_CCW:
-                    AudioMgr::setVolume(AudioMgr::getVolume() - 1);
+                    if (onNowPlaying) {
+                        AudioMgr::setVolume(AudioMgr::getVolume() - 1);
+                    } else {
+                        UI::sendKey(LV_KEY_PREV);
+                    }
                     break;
 
                 case InputEvent::ENC_PRESS:
-                    AudioMgr::cyclePlayMode();
+                    if (onNowPlaying) {
+                        AudioMgr::cyclePlayMode();
+                    } else if (screen == Screen::SONG_LIST) {
+                        UI::showScreen(Screen::NOW_PLAYING);
+                    } else {
+                        // Back to song list from Settings/Bluetooth
+                        UI::showScreen(Screen::SONG_LIST);
+                    }
                     break;
 
                 default:
@@ -160,7 +192,8 @@ void setup() {
     Serial.begin(115200);
     delay(500);
     Serial.println("\n═══════════════════════════════════");
-    Serial.println("  Pseudo Vinyl MP3 Player v1.0");
+    Serial.println("  Pseudo Vinyl MP3 Player v2.0");
+    Serial.println("  ESP32-WROOM-32 + A2DP");
     Serial.println("═══════════════════════════════════\n");
 
     // 1. Display
@@ -181,7 +214,14 @@ void setup() {
     // 3. Input
     Input::init();
 
-    // 4. Spawn FreeRTOS tasks
+    // 4. Bluetooth (target device from NVS) + audio pipeline.
+    //    AudioMgr::init starts A2DP if the saved output mode is Bluetooth.
+    BtMgr::init();
+    AudioMgr::init();
+    UI::setOutputModeLabel(AudioMgr::getOutputMode());
+    UI::setBtStatus(BtMgr::isStarted() ? "Searching..." : "Off (wired mode)");
+
+    // 5. Spawn FreeRTOS tasks
     xTaskCreatePinnedToCore(audioTask, "audio", 8192, nullptr, 3, &audioTaskHandle, 0);
     xTaskCreatePinnedToCore(uiTask,    "ui",    8192, nullptr, 1, &uiTaskHandle,    1);
     xTaskCreatePinnedToCore(inputTask, "input", 4096, nullptr, 2, &inputTaskHandle, 1);

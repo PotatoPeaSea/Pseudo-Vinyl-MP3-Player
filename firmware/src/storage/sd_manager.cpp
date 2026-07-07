@@ -11,7 +11,8 @@ static bool mounted = false;
 bool Storage::init() {
     sdSPI.begin(PIN_SD_SCLK, PIN_SD_MISO, PIN_SD_MOSI, PIN_SD_CS);
 
-    if (!SD.begin(PIN_SD_CS, sdSPI, 25000000)) {  // 25 MHz
+    // 20 MHz — MISO is routed through the GPIO matrix (pin 35), keep margin
+    if (!SD.begin(PIN_SD_CS, sdSPI, 20000000)) {
         Serial.println("[SD] Mount FAILED");
         mounted = false;
         return false;
@@ -96,11 +97,15 @@ uint8_t* Storage::loadArtFile(const String &mp3Path, size_t &outSize) {
     }
 
     outSize = f.size();
-    // Allocate in PSRAM if available
-    uint8_t *buf = (uint8_t *)heap_caps_malloc(outSize, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!buf) {
-        buf = (uint8_t *)malloc(outSize);
+    // No PSRAM on WROOM-32 — refuse art that won't fit next to the BT stack
+    if (outSize == 0 || outSize > ART_MAX_BYTES) {
+        Serial.printf("[SD] Art too large (%u bytes, max %u): %s\n",
+                      (unsigned)outSize, (unsigned)ART_MAX_BYTES, artPath.c_str());
+        f.close();
+        outSize = 0;
+        return nullptr;
     }
+    uint8_t *buf = (uint8_t *)malloc(outSize);
 
     if (buf) {
         f.read(buf, outSize);

@@ -2,20 +2,27 @@
 #include <Arduino.h>
 #include "../storage/sd_manager.h"
 #include "../audio/audio_manager.h"
+#include "../bluetooth/bt_manager.h"
 
 /**
  * UI Manager — LVGL screen navigation and updates
  *
  * Screens:
  *   - Now Playing (vinyl spin + track info)
- *   - Song List (scrollable)
- *   - Settings (with BT placeholder)
+ *   - Song List (scrollable, encoder-navigable)
+ *   - Settings (output toggle)
+ *   - Bluetooth (device scan/pick)
+ *
+ * Navigation: a virtual LVGL keypad — the input task forwards encoder
+ * turns as LV_KEY_NEXT/PREV and the select button as LV_KEY_ENTER via
+ * sendKey().
  */
 
 enum class Screen : uint8_t {
     NOW_PLAYING = 0,
     SONG_LIST,
     SETTINGS,
+    BLUETOOTH,
 };
 
 namespace UI {
@@ -24,6 +31,12 @@ namespace UI {
 
     /// Switch to a screen
     void showScreen(Screen screen);
+
+    /// Screen currently shown (kept in sync even for internal navigation)
+    Screen activeScreen();
+
+    /// Queue a key for the LVGL keypad indev (LV_KEY_NEXT/PREV/ENTER)
+    void sendKey(uint32_t lvKey);
 
     /// Update dynamic content (vinyl spin, progress, etc.)
     /// Call every frame from the UI task
@@ -43,4 +56,11 @@ namespace UI {
 
     /// Update play mode indicator
     void setPlayModeIndicator(PlayMode mode);
+
+    /// Bluetooth screen: status line + discovered device list
+    void setBtStatus(const String &status);
+    void setBtDevices(const std::vector<BtDevice> &devices);
+
+    /// Refresh the Settings output-mode label
+    void setOutputModeLabel(OutputMode mode);
 }

@@ -30,4 +30,7 @@ namespace Input {
 
     /// Check if there are pending events
     bool hasEvent();
+
+    /// Inject a synthetic event (used by the debug serial console)
+    void inject(InputEvent evt);
 }

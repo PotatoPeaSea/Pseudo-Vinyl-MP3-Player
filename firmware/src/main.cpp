@@ -25,6 +25,9 @@
 #include "storage/sd_manager.h"
 #include "audio/audio_manager.h"
 #include "bluetooth/bt_manager.h"
+#if DEBUG_MODE
+#include "debug/debug_console.h"
+#endif
 
 // ── Task Handles ────────────────────────────────────────────
 static TaskHandle_t audioTaskHandle = nullptr;
@@ -110,6 +113,9 @@ void inputTask(void *param) {
 
     for (;;) {
         Input::poll();
+#if DEBUG_MODE
+        DebugConsole::poll();
+#endif
 
         while (Input::hasEvent()) {
             InputEvent evt = Input::getEvent();
@@ -213,6 +219,9 @@ void setup() {
 
     // 3. Input
     Input::init();
+#if DEBUG_MODE
+    DebugConsole::init();
+#endif
 
     // 4. Bluetooth (target device from NVS) + audio pipeline.
     //    AudioMgr::init starts A2DP if the saved output mode is Bluetooth.

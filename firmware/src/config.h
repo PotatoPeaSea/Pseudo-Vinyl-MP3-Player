@@ -17,6 +17,12 @@
 #define BT_ENABLED          1
 #endif
 
+// Debug run mode: serial console simulates buttons/encoder (no hardware
+// needed). Enable by building the esp32dev-debug environment.
+#ifndef DEBUG_MODE
+#define DEBUG_MODE          0
+#endif
+
 // ── Display: GC9A01 (240×240 round IPS, VSPI) ───────────────
 // NOTE: pins are duplicated in platformio.ini TFT_eSPI build flags —
 // keep both in sync!

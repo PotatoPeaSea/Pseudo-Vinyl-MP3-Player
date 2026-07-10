@@ -28,24 +28,24 @@
 // keep both in sync!
 #define DISPLAY_WIDTH       240
 #define DISPLAY_HEIGHT      240
-#define PIN_TFT_MOSI        23
-#define PIN_TFT_SCLK        18
-#define PIN_TFT_CS          5
-#define PIN_TFT_DC          2
-#define PIN_TFT_RST         4
-#define PIN_TFT_BL          19
+#define PIN_TFT_MOSI        4       // SDA
+#define PIN_TFT_SCLK        16      // SCL
+#define PIN_TFT_CS          2
+#define PIN_TFT_DC          21
+#define PIN_TFT_RST         15
+// Display module has no backlight pin (BL hardwired on-board); brightness
+// control is unavailable.
 
 // ── SD Card (HSPI) ──────────────────────────────────────────
-// MISO on input-only GPIO 35 (SD module drives it; no pull-up needed here)
-#define PIN_SD_SCLK         14
-#define PIN_SD_MOSI         13
-#define PIN_SD_MISO         35
-#define PIN_SD_CS           15
+#define PIN_SD_SCLK         18
+#define PIN_SD_MOSI         17
+#define PIN_SD_MISO         19
+#define PIN_SD_CS           5
 
-// ── Audio: PCM5102 DAC (I2S, wired output) ──────────────────
-#define PIN_I2S_BCLK        26
-#define PIN_I2S_LRCK        25
-#define PIN_I2S_DOUT        22
+// ── Audio: Bluetooth A2DP only ──────────────────────────────
+// Wired I2S/PCM5102 output was removed: on the no-PSRAM WROOM-32 the
+// Classic-BT + A2DP stack (~108KB) plus SD/FATFS + LVGL UI leaves no room
+// for a second output path. Output is Bluetooth-only.
 
 // ── Rotary Encoder (KY-040) ─────────────────────────────────
 #define PIN_ENC_A           32
@@ -53,20 +53,26 @@
 #define PIN_ENC_SW          27
 
 // ── Buttons ─────────────────────────────────────────────────
-#define PIN_BTN_PLAY        16
-#define PIN_BTN_NEXT        17
-#define PIN_BTN_PREV        21
+#define PIN_BTN_PLAY        13      // moved off 16 (now TFT SCLK)
+#define PIN_BTN_NEXT        14      // moved off 17 (now SD MOSI)
+#define PIN_BTN_PREV        23      // moved off 21 (now TFT DC)
 
 // ── Battery voltage divider (ADC1_CH6 — usable with BT on) ──
 #define PIN_BATT_ADC        34
 
 // ── Bluetooth ───────────────────────────────────────────────
 #define BT_DEVICE_NAME      "Pseudo Vinyl"
-#define BT_RINGBUF_BYTES    (16 * 1024)   // ~92ms of 44.1k stereo PCM
+#define BT_RINGBUF_BYTES    (8 * 1024)    // ~46ms of 44.1k stereo PCM (heap-constrained)
 
 // ── Audio Defaults ──────────────────────────────────────────
 #define DEFAULT_VOLUME      12      // 0-21
 #define MAX_VOLUME          21
+
+// ── Library limit ───────────────────────────────────────────
+// Hard cap on songs loaded into RAM. Each LVGL list button is ~700 bytes and
+// each SongInfo is duplicated across the scanner, AudioMgr, and UI, so the
+// library must stay small to fit alongside the BT stack on the WROOM-32.
+#define MAX_SONGS           20
 
 // ── Album Art ───────────────────────────────────────────────
 // No PSRAM: 240×240 RGB565 (113KB) doesn't fit next to the BT stack.

@@ -60,7 +60,4 @@ namespace UI {
     /// Bluetooth screen: status line + discovered device list
     void setBtStatus(const String &status);
     void setBtDevices(const std::vector<BtDevice> &devices);
-
-    /// Refresh the Settings output-mode label
-    void setOutputModeLabel(OutputMode mode);
 }

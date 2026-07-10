@@ -7,8 +7,9 @@
 static TFT_eSPI tft = TFT_eSPI(DISPLAY_WIDTH, DISPLAY_HEIGHT);
 
 // LVGL display buffer — internal DMA-capable SRAM (WROOM-32 has no PSRAM).
-// 30 rows × 2 buffers = ~28.8KB, leaves headroom for the BT Classic stack.
-#define LV_BUF_SIZE (DISPLAY_WIDTH * 30)
+// 10 rows × 2 buffers = ~9.6KB. Kept small to leave heap for the Classic
+// BT / A2DP stack, which needs ~120KB to initialize.
+#define LV_BUF_SIZE (DISPLAY_WIDTH * 10)
 static lv_disp_draw_buf_t draw_buf;
 static lv_color_t *buf1 = nullptr;
 static lv_color_t *buf2 = nullptr;
@@ -31,9 +32,7 @@ static void disp_flush_cb(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t 
 // ── Public API ──────────────────────────────────────────────
 
 void Display::init() {
-    // Backlight
-    pinMode(PIN_TFT_BL, OUTPUT);
-    digitalWrite(PIN_TFT_BL, HIGH);
+    // No backlight pin on this display module — it's always on.
 
     // TFT
     tft.init();
@@ -74,5 +73,6 @@ void Display::update() {
 }
 
 void Display::setBacklight(uint8_t brightness) {
-    analogWrite(PIN_TFT_BL, brightness);
+    // No backlight control pin on this display module — no-op.
+    (void)brightness;
 }

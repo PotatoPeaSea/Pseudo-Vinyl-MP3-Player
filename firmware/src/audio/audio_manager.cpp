@@ -10,7 +10,7 @@
 // ── Output plumbing ─────────────────────────────────────────
 //
 //   SD File → StreamCopy → EncodedAudioStream(helix) → meter →
-//     VolumeStream → { I2SStream | BtMgr ring buffer }
+//     VolumeStream → BtMgr ring buffer (A2DP)
 
 // Forwards PCM into the Bluetooth ring buffer
 class BtPrint : public Print {
@@ -36,7 +36,6 @@ public:
 };
 
 // ── Static state ────────────────────────────────────────────
-static audio_tools::I2SStream i2sOut;
 static BtPrint btOut;
 static audio_tools::VolumeStream volumeOut;
 static MeterPrint meter;
@@ -52,7 +51,6 @@ static std::vector<SongInfo> playlist;
 static int currentIdx = -1;
 static bool playing = false;
 static PlayMode playMode = PlayMode::NORMAL;
-static OutputMode outputMode = OutputMode::BLUETOOTH;
 static int volume = DEFAULT_VOLUME;
 
 static audio_tools::AudioInfo lastInfo(44100, 2, 16);
@@ -110,22 +108,9 @@ static void applyVolume() {
 }
 
 static void applyOutputRouting() {
-    if (outputMode == OutputMode::WIRED) {
-        BtMgr::stop();
-        auto cfg = i2sOut.defaultConfig(TX_MODE);
-        cfg.pin_bck = PIN_I2S_BCLK;
-        cfg.pin_ws = PIN_I2S_LRCK;
-        cfg.pin_data = PIN_I2S_DOUT;
-        cfg.copyFrom(lastInfo);
-        i2sOut.begin(cfg);
-        volumeOut.setOutput(i2sOut);
-        Serial.println("[Audio] Output: wired I2S (PCM5102)");
-    } else {
-        i2sOut.end();
-        volumeOut.setOutput(btOut);
-        BtMgr::start();
-        Serial.println("[Audio] Output: Bluetooth A2DP");
-    }
+    volumeOut.setOutput(btOut);
+    BtMgr::start();
+    Serial.println("[Audio] Output: Bluetooth A2DP");
 }
 
 static void closePipeline() {
@@ -137,7 +122,6 @@ static void closePipeline() {
 
 void AudioMgr::init() {
     audioPrefs.begin("audiocfg", false);
-    outputMode = (OutputMode)audioPrefs.getUChar("output", (uint8_t)OutputMode::BLUETOOTH);
     volume = audioPrefs.getUChar("volume", DEFAULT_VOLUME);
 
     auto vcfg = volumeOut.defaultConfig();
@@ -152,9 +136,9 @@ void AudioMgr::init() {
 void AudioMgr::loop() {
     if (!playing) return;
 
-    // In BT mode with no sink connected, hold playback instead of
-    // racing through the file (BT writes would be dropped)
-    if (outputMode == OutputMode::BLUETOOTH && !BtMgr::isConnected()) {
+    // With no BT sink connected, hold playback instead of racing through
+    // the file (BT writes would be dropped)
+    if (!BtMgr::isConnected()) {
         vTaskDelay(pdMS_TO_TICKS(50));
         return;
     }
@@ -165,9 +149,6 @@ void AudioMgr::loop() {
     if (info.sample_rate != 0 && info != lastInfo) {
         lastInfo = info;
         volumeOut.setAudioInfo(info);
-        if (outputMode == OutputMode::WIRED) {
-            i2sOut.setAudioInfo(info);
-        }
         Serial.printf("[Audio] Format: %d Hz, %d ch\n", info.sample_rate, info.channels);
     }
 
@@ -246,25 +227,6 @@ void AudioMgr::prev() {
         int p = getPrevIndex();
         if (p >= 0) play(p);
     }
-}
-
-void AudioMgr::setOutputMode(OutputMode mode) {
-    if (mode == outputMode) return;
-    bool wasPlaying = playing;
-    int resumeIdx = currentIdx;
-    closePipeline();
-
-    outputMode = mode;
-    audioPrefs.putUChar("output", (uint8_t)mode);
-    applyOutputRouting();
-
-    if (wasPlaying && resumeIdx >= 0) {
-        play(resumeIdx);
-    }
-}
-
-OutputMode AudioMgr::getOutputMode() {
-    return outputMode;
 }
 
 void AudioMgr::setVolume(int vol) {

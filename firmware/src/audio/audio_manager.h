@@ -3,12 +3,12 @@
 #include "../storage/sd_manager.h"
 
 /**
- * Audio Manager — MP3 decode + switchable output
+ * Audio Manager — MP3 decode + Bluetooth A2DP output
  *
  * Decode: helix MP3 (arduino-audio-tools) — runs from internal SRAM,
  *         no PSRAM needed (ESP32-audioI2S 3.x required PSRAM).
- * Output: Bluetooth A2DP (default) via BtMgr ring buffer,
- *         or wired I2S to the PCM5102 DAC.
+ * Output: Bluetooth A2DP only, via the BtMgr ring buffer. (Wired I2S was
+ *         removed — no heap headroom for it next to the BT stack.)
  */
 
 enum class PlayMode : uint8_t {
@@ -16,11 +16,6 @@ enum class PlayMode : uint8_t {
     SHUFFLE,
     REPEAT_ALL,
     REPEAT_ONE,
-};
-
-enum class OutputMode : uint8_t {
-    BLUETOOTH = 0,
-    WIRED,
 };
 
 namespace AudioMgr {
@@ -40,10 +35,6 @@ namespace AudioMgr {
     void stop();
     void next();
     void prev();
-
-    /// Output routing (persisted to NVS)
-    void setOutputMode(OutputMode mode);
-    OutputMode getOutputMode();
 
     /// Volume (0-21)
     void setVolume(int vol);

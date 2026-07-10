@@ -33,6 +33,8 @@ bool Storage::isMounted() {
 
 static void scanDir(File dir, std::vector<SongInfo> &songs) {
     while (true) {
+        if (songs.size() >= MAX_SONGS) break;   // heap-limited library cap
+
         File entry = dir.openNextFile();
         if (!entry) break;
 
@@ -83,7 +85,7 @@ std::vector<SongInfo> Storage::scanMusic(const char *rootPath) {
         return a.title < b.title;
     });
 
-    Serial.printf("[SD] Found %d MP3 files\n", songs.size());
+    Serial.printf("[SD] Loaded %d MP3 files (cap %d)\n", songs.size(), MAX_SONGS);
     return songs;
 }
 

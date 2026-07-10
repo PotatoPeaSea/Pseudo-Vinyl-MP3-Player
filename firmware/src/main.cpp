@@ -79,7 +79,7 @@ void uiTask(void *param) {
             if (conn != lastBtConnected) {
                 lastBtConnected = conn;
                 UI::setBtStatus(conn ? ("Connected: " + BtMgr::connectedName())
-                                     : (BtMgr::isStarted() ? "Searching..." : "Off (wired mode)"));
+                                     : (BtMgr::isStarted() ? "Searching..." : "Off"));
             }
         }
 
@@ -202,12 +202,36 @@ void setup() {
     Serial.println("  ESP32-WROOM-32 + A2DP");
     Serial.println("═══════════════════════════════════\n");
 
+    Serial.printf("[Heap] boot start: free=%u largest=%u\n",
+                  ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+
     // 1. Display
     Display::init();
     UI::init();
     Serial.println("[Boot] Display ready");
+    Serial.printf("[Heap] after display+UI: free=%u largest=%u\n",
+                  ESP.getFreeHeap(), ESP.getMaxAllocHeap());
 
-    // 2. SD Card
+    // 2. Input
+    Input::init();
+#if DEBUG_MODE
+    DebugConsole::init();
+#endif
+
+    // 3. Bluetooth (target device from NVS) + audio pipeline.
+    //    AudioMgr::init starts A2DP if the saved output mode is Bluetooth.
+    //    Done BEFORE the SD mount so the Classic-BT / A2DP stack (needs
+    //    ~120KB to init) gets the heap while it's still plentiful — the
+    //    FATFS mount retains ~80KB and would otherwise starve it.
+    Serial.printf("[Heap] before BT/audio: free=%u largest=%u\n",
+                  ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+    BtMgr::init();
+    AudioMgr::init();
+    UI::setBtStatus(BtMgr::isStarted() ? "Searching..." : "Off");
+    Serial.printf("[Heap] after BT/audio: free=%u largest=%u\n",
+                  ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+
+    // 4. SD Card (mounted last — FATFS holds ~80KB while mounted)
     if (Storage::init()) {
         songs = Storage::scanMusic("/");
         AudioMgr::setPlaylist(songs);
@@ -216,19 +240,8 @@ void setup() {
     } else {
         Serial.println("[Boot] WARNING: No SD card!");
     }
-
-    // 3. Input
-    Input::init();
-#if DEBUG_MODE
-    DebugConsole::init();
-#endif
-
-    // 4. Bluetooth (target device from NVS) + audio pipeline.
-    //    AudioMgr::init starts A2DP if the saved output mode is Bluetooth.
-    BtMgr::init();
-    AudioMgr::init();
-    UI::setOutputModeLabel(AudioMgr::getOutputMode());
-    UI::setBtStatus(BtMgr::isStarted() ? "Searching..." : "Off (wired mode)");
+    Serial.printf("[Heap] after SD: free=%u largest=%u\n",
+                  ESP.getFreeHeap(), ESP.getMaxAllocHeap());
 
     // 5. Spawn FreeRTOS tasks
     xTaskCreatePinnedToCore(audioTask, "audio", 8192, nullptr, 3, &audioTaskHandle, 0);

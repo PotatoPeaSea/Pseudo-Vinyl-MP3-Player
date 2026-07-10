@@ -4,6 +4,7 @@
 #include "../storage/sd_manager.h"
 #include "../bluetooth/bt_manager.h"
 #include <lvgl.h>
+#include <Arduino.h>
 
 // ── Screen objects ──────────────────────────────────────────
 static lv_obj_t *scr_now_playing = nullptr;
@@ -283,18 +284,6 @@ static void songListClickCb(lv_event_t *e) {
 // SETTINGS SCREEN
 // ═══════════════════════════════════════════════════════════
 
-static const char* outputModeText(OutputMode m) {
-    return (m == OutputMode::BLUETOOTH) ? "Output: Bluetooth" : "Output: Wired (3.5mm)";
-}
-
-static void outputToggleCb(lv_event_t *e) {
-    OutputMode m = (AudioMgr::getOutputMode() == OutputMode::BLUETOOTH)
-                       ? OutputMode::WIRED
-                       : OutputMode::BLUETOOTH;
-    AudioMgr::setOutputMode(m);
-    UI::setOutputModeLabel(m);
-}
-
 static void btMenuCb(lv_event_t *e) {
     UI::showScreen(Screen::BLUETOOTH);
 }
@@ -318,11 +307,10 @@ static void createSettingsScreen() {
     lv_obj_set_style_bg_opa(list, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(list, 0, 0);
 
-    // Audio output toggle
-    set_output_btn = lv_list_add_btn(list, LV_SYMBOL_VOLUME_MAX,
-                                     outputModeText(OutputMode::BLUETOOTH));
+    // Audio output — Bluetooth only (wired output removed)
+    set_output_btn = lv_list_add_btn(list, LV_SYMBOL_VOLUME_MAX, "Output: Bluetooth");
     setupListBtn(set_output_btn, grp_settings);
-    lv_obj_add_event_cb(set_output_btn, outputToggleCb, LV_EVENT_CLICKED, nullptr);
+    lv_obj_clear_flag(set_output_btn, LV_OBJ_FLAG_CLICKABLE);
 
     // Bluetooth device menu
     lv_obj_t *bt_btn = lv_list_add_btn(list, LV_SYMBOL_BLUETOOTH, "Bluetooth Devices");
@@ -496,12 +484,29 @@ void UI::setSongList(const std::vector<SongInfo> &songs) {
     // Clear existing items
     lv_obj_clean(sl_list);
 
+    Serial.printf("[UI] setSongList: %u songs, free heap=%u largest=%u\n",
+                  (unsigned)songs.size(), ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+
+    // Guard against heap exhaustion: LVGL uses system malloc, and on the
+    // no-PSRAM WROOM-32 the Classic-BT/A2DP stack leaves little headroom.
+    // Each list button is ~700 bytes; stop before we run the heap dry so we
+    // degrade gracefully instead of dereferencing a NULL LVGL allocation.
+    const uint32_t HEAP_FLOOR = 20000;
+    size_t built = 0;
     for (size_t i = 0; i < songs.size(); i++) {
+        if (ESP.getMaxAllocHeap() < HEAP_FLOOR) {
+            Serial.printf("[UI] Song list truncated at %u/%u (low heap=%u)\n",
+                          (unsigned)i, (unsigned)songs.size(), ESP.getFreeHeap());
+            break;
+        }
         const char *icon = songs[i].hasArt ? LV_SYMBOL_IMAGE : LV_SYMBOL_AUDIO;
         lv_obj_t *btn = lv_list_add_btn(sl_list, icon, songs[i].title.c_str());
         setupListBtn(btn, grp_song_list);
         lv_obj_add_event_cb(btn, songListClickCb, LV_EVENT_CLICKED, (void *)(uintptr_t)i);
+        built++;
     }
+    Serial.printf("[UI] Built %u list buttons, free heap=%u\n",
+                  (unsigned)built, ESP.getFreeHeap());
 }
 
 void UI::setNowPlaying(const SongInfo *song, bool playing) {
@@ -576,11 +581,3 @@ void UI::setBtDevices(const std::vector<BtDevice> &devices) {
     }
 }
 
-void UI::setOutputModeLabel(OutputMode mode) {
-    if (!set_output_btn) return;
-    // lv_list_add_btn puts the label as the second child (after the icon)
-    lv_obj_t *label = lv_obj_get_child(set_output_btn, 1);
-    if (label) {
-        lv_label_set_text(label, outputModeText(mode));
-    }
-}

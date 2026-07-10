@@ -1,7 +1,5 @@
 #include "../config.h"
 
-#if DEBUG_MODE
-
 #include <Arduino.h>
 #include "debug_console.h"
 #include "../input/input_manager.h"
@@ -113,7 +111,7 @@ static void handleLine(char *line) {
 // ── Public API ──────────────────────────────────────────────
 
 void DebugConsole::init() {
-    Serial.println("[Debug] DEBUG MODE — serial console simulates buttons/encoder");
+    Serial.println("[Debug] Serial console active — drive buttons/encoder over serial");
     printHelp();
 }
 
@@ -143,5 +141,3 @@ void DebugConsole::poll() {
         }
     }
 }
-
-#endif // DEBUG_MODE

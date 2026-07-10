@@ -72,7 +72,7 @@
 // Hard cap on songs loaded into RAM. Each LVGL list button is ~700 bytes and
 // each SongInfo is duplicated across the scanner, AudioMgr, and UI, so the
 // library must stay small to fit alongside the BT stack on the WROOM-32.
-#define MAX_SONGS           20
+#define MAX_SONGS           15
 
 // ── Album Art ───────────────────────────────────────────────
 // No PSRAM: 240×240 RGB565 (113KB) doesn't fit next to the BT stack.

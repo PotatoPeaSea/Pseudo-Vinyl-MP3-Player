@@ -1,11 +1,11 @@
 #pragma once
 
 /**
- * Debug Console — serial commands simulate physical IO
+ * Debug Console — serial commands drive physical IO
  *
- * Only compiled in when DEBUG_MODE=1 (esp32dev-debug build environment).
- * Type commands into the serial monitor to drive the device without
- * buttons or a rotary encoder wired up. Type "help" for the command list.
+ * Always compiled in. Injects input events alongside the hardware buttons/
+ * encoder, so you can drive the device from the serial monitor even when the
+ * controls aren't wired up. Type "help" for the command list.
  */
 
 namespace DebugConsole {

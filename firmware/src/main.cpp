@@ -25,9 +25,7 @@
 #include "storage/sd_manager.h"
 #include "audio/audio_manager.h"
 #include "bluetooth/bt_manager.h"
-#if DEBUG_MODE
 #include "debug/debug_console.h"
-#endif
 
 // ── Task Handles ────────────────────────────────────────────
 static TaskHandle_t audioTaskHandle = nullptr;
@@ -113,9 +111,7 @@ void inputTask(void *param) {
 
     for (;;) {
         Input::poll();
-#if DEBUG_MODE
-        DebugConsole::poll();
-#endif
+        DebugConsole::poll();   // serial commands inject events alongside hardware
 
         while (Input::hasEvent()) {
             InputEvent evt = Input::getEvent();
@@ -214,9 +210,7 @@ void setup() {
 
     // 2. Input
     Input::init();
-#if DEBUG_MODE
     DebugConsole::init();
-#endif
 
     // 3. Bluetooth (target device from NVS) + audio pipeline.
     //    AudioMgr::init starts A2DP if the saved output mode is Bluetooth.
@@ -243,12 +237,21 @@ void setup() {
     Serial.printf("[Heap] after SD: free=%u largest=%u\n",
                   ESP.getFreeHeap(), ESP.getMaxAllocHeap());
 
-    // 5. Spawn FreeRTOS tasks
-    xTaskCreatePinnedToCore(audioTask, "audio", 8192, nullptr, 3, &audioTaskHandle, 0);
-    xTaskCreatePinnedToCore(uiTask,    "ui",    8192, nullptr, 1, &uiTaskHandle,    1);
-    xTaskCreatePinnedToCore(inputTask, "input", 4096, nullptr, 2, &inputTaskHandle, 1);
+    // 5. Spawn FreeRTOS tasks. Heap is tight after the BT stack + FATFS mount,
+    //    and each stack must come from a single contiguous block. Create the
+    //    small input task FIRST — it carries both the hardware controls and the
+    //    serial debug console, so it must not be the one starved of a stack.
+    //    Verify every task actually starts (a silent failure here previously
+    //    killed all input).
+    BaseType_t ok;
+    ok = xTaskCreatePinnedToCore(inputTask, "input", 3072, nullptr, 2, &inputTaskHandle, 1);
+    if (ok != pdPASS) Serial.println("[Boot] ERROR: input task failed to start!");
+    ok = xTaskCreatePinnedToCore(uiTask,    "ui",    8192, nullptr, 1, &uiTaskHandle,    1);
+    if (ok != pdPASS) Serial.println("[Boot] ERROR: ui task failed to start!");
+    ok = xTaskCreatePinnedToCore(audioTask, "audio", 6144, nullptr, 3, &audioTaskHandle, 0);
+    if (ok != pdPASS) Serial.println("[Boot] ERROR: audio task failed to start!");
 
-    Serial.println("[Boot] All tasks launched\n");
+    Serial.printf("[Boot] Tasks launched, free heap=%u\n", ESP.getFreeHeap());
 }
 
 void loop() {

@@ -5,9 +5,12 @@
  * Entry point: initializes all peripherals and spawns FreeRTOS tasks.
  *
  * Task layout (dual-core):
- *   Core 0: audio_task   — MP3 decode + output feed (BT stack also lives here)
- *   Core 1: ui_task      — LVGL display refresh (~60fps)
- *   Core 1: input_task   — Button/encoder polling (5ms)
+ *   Core 0: Bluetooth ONLY (controller + Bluedroid host + SBC encode).
+ *           Our tasks stay off it: SD/decode flash-cache pressure on core 0
+ *           contributed to L2CAP congestion → A2DP stutter/stalls.
+ *   Core 1: audio_task   — MP3 decode + output feed (prio 3)
+ *   Core 1: input_task   — Button/encoder polling (5ms, prio 2)
+ *   Core 1: ui_task      — LVGL display refresh (~60fps, prio 1)
  *
  * Controls:
  *   Now Playing: PLAY=play/pause, NEXT/PREV=track, encoder=volume,
@@ -37,10 +40,10 @@ static TaskHandle_t inputTaskHandle = nullptr;
 static std::vector<SongInfo> songs;
 
 // ═══════════════════════════════════════════════════════════
-// AUDIO TASK (Core 0) — MP3 decode + output feed
+// AUDIO TASK (Core 1) — MP3 decode + output feed
 // ═══════════════════════════════════════════════════════════
 void audioTask(void *param) {
-    Serial.println("[Task] Audio task started on Core 0");
+    Serial.println("[Task] Audio task started on Core 1");
 
     for (;;) {
         AudioMgr::loop();
@@ -279,7 +282,11 @@ void setup() {
     if (ok != pdPASS) Serial.println("[Boot] ERROR: input task failed to start!");
     ok = xTaskCreatePinnedToCore(uiTask,    "ui",    8192, nullptr, 1, &uiTaskHandle,    1);
     if (ok != pdPASS) Serial.println("[Boot] ERROR: ui task failed to start!");
-    ok = xTaskCreatePinnedToCore(audioTask, "audio", 6144, nullptr, 3, &audioTaskHandle, 0);
+    // Audio on core 1 WITH the UI, not core 0: the BT controller + host +
+    // SBC encoder get core 0 to themselves. Decode at prio 3 preempts the
+    // UI's LVGL rendering, which is the right priority order for a music
+    // player (dropped frames beat dropped audio).
+    ok = xTaskCreatePinnedToCore(audioTask, "audio", 6144, nullptr, 3, &audioTaskHandle, 1);
     if (ok != pdPASS) Serial.println("[Boot] ERROR: audio task failed to start!");
 
     Serial.printf("[Boot] Tasks launched, free heap=%u\n", ESP.getFreeHeap());

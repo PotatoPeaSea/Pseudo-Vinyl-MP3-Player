@@ -207,6 +207,33 @@ the audio state still says "started".
 The order of allocation matters as much as the amount: same totals, but
 media-start-then-FATFS works where the race dies. Connected ≠ streaming;
 gate on the state you actually need.
+
+### Stutter root cause is NOT memory: L2CAP congestion oscillation
+
+After the budget closed, playback still stuttered — with **zero** ring
+buffer underruns, **zero** send timeouts, and a clean Bluedroid log at
+info level. A generated 440Hz tone (no SD, no decoder — `tone` serial
+command) reproduced the *dead-stream* variant: media state STARTED,
+consumer pulling nothing, constant send timeouts. Diagnosis: Bluedroid's
+A2DP source stops requesting data while its L2CAP TX path is congested
+and resumes on the un-congest event. Oscillating congestion = the
+0.5s-play/0.5s-silence stutter (buffer stays full, so *our* telemetry
+shows nothing); a lost un-congest event = a permanently dead stream that
+only a reconnect fixes.
+
+**Countermeasures** (not memory fixes, recorded here because the trail
+ran through every memory theory first):
+
+- Stall watchdog in `writeAudio`: ~4s of continuous send timeouts while
+  connected → force `a2dp.disconnect()` → restart discovery (the library
+  does NOT rescan on its own with auto-reconnect off) → ssid callback
+  reconnects → the connect handler kicks a fresh media stream.
+- Audio task moved core 0 → core 1: Bluetooth (controller + host + SBC)
+  now owns core 0 outright; SD/decode flash-cache pressure on core 0
+  contributed to congestion. Decode (prio 3) preempts LVGL (prio 1) on
+  core 1 — dropped frames beat dropped audio.
+- Earlier link-side knobs kept: modem sleep disabled, BR/EDR TX power
+  at +9dBm.
 - **Task stacks unchanged** (3K/8K/6K) — no hardware high-water-mark data to
   justify trims; a stack overflow is a crash, not a slowdown.
 - BLE controller memory: already released — the ESP32-A2DP library runs the

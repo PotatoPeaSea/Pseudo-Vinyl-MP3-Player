@@ -32,6 +32,15 @@ static volatile uint32_t underrunBytes = 0;
 static volatile uint32_t sendTimeouts = 0;
 static volatile uint32_t lastProducerWrite = 0;   // millis() of last writeAudio
 
+// Stall watchdog: Bluedroid's A2DP source stops requesting data on L2CAP
+// congestion; sometimes the un-congest event never arrives and the stream
+// is dead until reboot ("media state STARTED" but zero pulls — seen on
+// hardware with a pure tone, no SD/decode in the path). After ~4s of
+// continuous send timeouts we force a disconnect; discovery then finds the
+// target again and the connect path rebuilds the media stream fresh.
+static volatile uint16_t consecTimeouts = 0;
+static volatile bool reconnectPending = false;
+
 // Feed PCM to the BT stack; zero-fill on underrun so the stream never stalls
 static int32_t dataCallback(uint8_t *data, int32_t len) {
     size_t got = 0;
@@ -107,6 +116,15 @@ static void connectionStateChanged(esp_a2d_connection_state_t state, void *) {
         default:
             streaming = false;   // no media stream without a connection
             Serial.println("[BT] Disconnected");
+            // Stall-watchdog recovery: with auto_reconnect off the library
+            // does NOT rescan after a disconnect, so restart discovery
+            // ourselves — the ssid_callback reconnects to the saved target
+            // and the CONNECTED case above kicks a fresh media stream.
+            if (reconnectPending) {
+                reconnectPending = false;
+                Serial.println("[BT] Restarting discovery to recover the stream");
+                esp_bt_gap_start_discovery(ESP_BT_INQ_MODE_GENERAL_INQUIRY, 10, 0);
+            }
             break;
     }
 }
@@ -238,6 +256,7 @@ size_t BtMgr::writeAudio(const uint8_t *data, size_t len) {
     }
     lastProducerWrite = millis();
     if (xRingbufferSend(audioRb, data, len, pdMS_TO_TICKS(500)) == pdTRUE) {
+        consecTimeouts = 0;
         return len;
     }
     // Full buffer for 500ms straight = consumer stalled; this PCM is lost
@@ -249,6 +268,14 @@ size_t BtMgr::writeAudio(const uint8_t *data, size_t len) {
         Serial.printf("[BT] ringbuf send timeout x%u (consumer stalled, PCM dropped)\n",
                       sendTimeouts);
         sendTimeouts = 0;
+    }
+    // ~4s of continuous stall → the congestion never cleared; reconnect
+    // (see the stall-watchdog note at the top of this file)
+    if (++consecTimeouts >= 8 && connected) {
+        consecTimeouts = 0;
+        reconnectPending = true;
+        Serial.println("[BT] Media stream stalled >4s — forcing reconnect");
+        a2dp.disconnect();
     }
     return 0;
 }

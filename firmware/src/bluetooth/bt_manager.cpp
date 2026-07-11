@@ -167,6 +167,13 @@ void BtMgr::start() {
     esp_err_t slp = esp_bt_sleep_disable();
     Serial.printf("[BT] modem sleep disabled: %s\n", esp_err_to_name(slp));
 
+    // Max BR/EDR TX power (+9dBm; default is several dB lower). A marginal
+    // link drops A2DP media packets after our callback with no error we can
+    // see — raising TX power is the only link-robustness knob available.
+    // Must be called after the controller is enabled (a2dp.start()).
+    esp_err_t txp = esp_bredr_tx_power_set(ESP_PWR_LVL_P9, ESP_PWR_LVL_P9);
+    Serial.printf("[BT] TX power max: %s\n", esp_err_to_name(txp));
+
     started = true;
     Serial.println("[BT] A2DP source started, discovering...");
 }

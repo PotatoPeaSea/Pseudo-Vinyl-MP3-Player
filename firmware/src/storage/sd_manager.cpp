@@ -108,6 +108,16 @@ uint8_t* Storage::loadArtFile(const String &mp3Path, size_t &outSize) {
         outSize = 0;
         return nullptr;
     }
+    // Skip art when the heap is tight rather than squeeze it in: a missing
+    // cover degrades gracefully, but leaving the UI/decoder without working
+    // memory crashes (LVGL does not check its own allocations)
+    if (ESP.getMaxAllocHeap() < outSize + 12 * 1024) {
+        Serial.printf("[SD] Skipping art, heap too tight (largest=%u need=%u+12K): %s\n",
+                      ESP.getMaxAllocHeap(), (unsigned)outSize, artPath.c_str());
+        f.close();
+        outSize = 0;
+        return nullptr;
+    }
     uint8_t *buf = (uint8_t *)malloc(outSize);
 
     if (buf) {

@@ -49,9 +49,17 @@ static Preferences audioPrefs;
 
 // Not owned — points at the app-lifetime library in main.cpp (no RAM copy)
 static const std::vector<SongInfo> *playlist = nullptr;
-static int currentIdx = -1;
-static bool playing = false;
+static volatile int currentIdx = -1;
+static volatile bool playing = false;
 static bool decoderOpen = false;   // helix buffers (~25KB) currently allocated
+
+// Deferred commands: play()/stop() may be called from the input or UI task,
+// but opening the file and (re)initializing the helix decoder is ~25KB of
+// allocations with a deep call stack — too heavy for the 3KB input task and
+// it must not race the decode loop. Public calls only record the request;
+// AudioMgr::loop() (audio task) executes it.
+static volatile int pendingPlayIdx = -1;
+static volatile bool pendingStop = false;
 static PlayMode playMode = PlayMode::NORMAL;
 static int volume = DEFAULT_VOLUME;
 
@@ -150,7 +158,48 @@ void AudioMgr::init() {
     Serial.println("[Audio] Pipeline initialized (helix MP3)");
 }
 
+// Actually start a track — runs on the audio task only (see doPlay note on
+// the pending* variables above)
+static void doPlay(int index) {
+    if (index < 0 || index >= (int)playlistSize()) return;
+
+    closePipeline();
+    currentIdx = index;
+    const SongInfo &song = (*playlist)[currentIdx];
+
+    curFile = SD.open(song.filepath.c_str(), FILE_READ);
+    if (!curFile) {
+        Serial.printf("[Audio] FAILED to open: %s\n", song.filepath.c_str());
+        return;
+    }
+    curFileSize = curFile.size();
+    meter.bytes = 0;
+
+    decoder.begin();
+    decoderOpen = true;
+    copier.begin(decoder, curFile);
+    playing = true;
+    Serial.printf("[Audio] Playing [%d]: %s (free=%u largest=%u)\n",
+                  (int)currentIdx, Storage::songTitle(song).c_str(),
+                  ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+}
+
 void AudioMgr::loop() {
+    // Execute deferred commands from other tasks
+    if (pendingStop) {
+        pendingStop = false;
+        pendingPlayIdx = -1;
+        closePipeline();
+        releaseDecoder();
+        currentIdx = -1;
+        Serial.println("[Audio] Stopped");
+    }
+    int req = pendingPlayIdx;
+    if (req >= 0) {
+        pendingPlayIdx = -1;
+        doPlay(req);
+    }
+
     if (!playing) return;
 
     // With no BT sink connected, hold playback instead of racing through
@@ -171,10 +220,11 @@ void AudioMgr::loop() {
 
     size_t copied = copier.copy();
     if (copied == 0 && curFile && curFile.available() == 0) {
-        // Track finished — auto-advance
+        // Track finished — auto-advance (already on the audio task,
+        // so start the next track directly)
         int nextIdx = getNextIndex();
         if (nextIdx >= 0) {
-            play(nextIdx);
+            doPlay(nextIdx);
         } else {
             closePipeline();
             releaseDecoder();
@@ -196,25 +246,7 @@ void AudioMgr::setPlaylist(const std::vector<SongInfo> *songs) {
 
 void AudioMgr::play(int index) {
     if (index < 0 || index >= (int)playlistSize()) return;
-
-    closePipeline();
-    currentIdx = index;
-    const SongInfo &song = (*playlist)[currentIdx];
-
-    curFile = SD.open(song.filepath.c_str(), FILE_READ);
-    if (!curFile) {
-        Serial.printf("[Audio] FAILED to open: %s\n", song.filepath.c_str());
-        return;
-    }
-    curFileSize = curFile.size();
-    meter.bytes = 0;
-
-    decoder.begin();
-    decoderOpen = true;
-    copier.begin(decoder, curFile);
-    playing = true;
-    Serial.printf("[Audio] Playing [%d]: %s\n", currentIdx,
-                  Storage::songTitle(song).c_str());
+    pendingPlayIdx = index;   // executed by the audio task in loop()
 }
 
 void AudioMgr::pause() {
@@ -230,9 +262,7 @@ void AudioMgr::resume() {
 }
 
 void AudioMgr::stop() {
-    closePipeline();
-    releaseDecoder();
-    Serial.println("[Audio] Stopped");
+    pendingStop = true;   // executed by the audio task in loop()
 }
 
 void AudioMgr::next() {

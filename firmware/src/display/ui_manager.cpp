@@ -512,14 +512,31 @@ static void clearWidgetRefs() {
     freeArt();   // reclaim up to ART_MAX_BYTES while off the Now Playing screen
 }
 
-// Build the target screen, load it, then delete the old tree + focus group.
+// Delete the old tree + focus group, then build and load the target screen.
 // Must run on the UI task, outside any LVGL event callback.
+//
+// Delete-BEFORE-build matters: peak heap is max(old, new) instead of their
+// sum. Building first once crashed the device — the 15-button song list plus
+// a fresh Now Playing tree plus the just-started MP3 decoder ran the heap to
+// zero, and LVGL's unchecked lv_mem_realloc in lv_obj_class_create_obj turned
+// that into a NULL write. LVGL can't have its active screen deleted under it,
+// so a bare placeholder screen (~150B) bridges the gap (one blank frame).
 static void doShowScreen(Screen screen) {
     lv_obj_t *old = lv_scr_act();
     lv_group_t *oldGrp = cur_grp;
 
     clearWidgetRefs();
     cur_grp = nullptr;
+
+    lv_obj_t *placeholder = lv_obj_create(NULL);
+    lv_obj_add_style(placeholder, &style_bg, 0);
+    if (keypad_indev) {
+        lv_indev_reset(keypad_indev, nullptr);   // drop refs into the old tree
+        lv_indev_set_group(keypad_indev, nullptr);
+    }
+    lv_scr_load(placeholder);
+    if (old && old != placeholder) lv_obj_del(old);
+    if (oldGrp) lv_group_del(oldGrp);
 
     lv_obj_t *scr = nullptr;
     switch (screen) {
@@ -530,14 +547,12 @@ static void doShowScreen(Screen screen) {
     }
 
     active_screen = screen;
-    if (keypad_indev) {
-        lv_indev_reset(keypad_indev, nullptr);   // drop refs into the old tree
-        lv_indev_set_group(keypad_indev, cur_grp);
-    }
+    if (keypad_indev) lv_indev_set_group(keypad_indev, cur_grp);
     lv_scr_load(scr);   // no fade — both trees would have to coexist longer
+    lv_obj_del(placeholder);
 
-    if (old && old != scr) lv_obj_del(old);
-    if (oldGrp) lv_group_del(oldGrp);
+    Serial.printf("[UI] Screen %d shown (free=%u largest=%u)\n",
+                  (int)screen, ESP.getFreeHeap(), ESP.getMaxAllocHeap());
 }
 
 // ═══════════════════════════════════════════════════════════

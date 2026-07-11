@@ -170,6 +170,39 @@ the LVGL tree directly.
   controller in `ESP_BT_MODE_CLASSIC_BT` and calls
   `esp_bt_controller_mem_release(ESP_BT_MODE_BLE)` itself.
 
+### Crash found in hardware testing: OOM during screen switch at play start
+
+**Symptom:** `StoreProhibited` (write to `0x14`) on Core 1 the moment a song
+started, in `lv_obj_class_create_obj` ← `lv_label_create` ← `doShowScreen`.
+**Diagnosis (addr2line + LVGL source):** LVGL 8 does not check the
+`lv_mem_realloc` of a parent's child array; offset `0x14` is exactly
+`children[5]` through a NULL pointer — the heap was fully exhausted while
+building the Now Playing screen. Three costs coincided:
+
+1. `doShowScreen` originally built the new screen *before* deleting the old
+   one — song list (15 buttons) + new tree resident together;
+2. `AudioMgr::play()` had just run the SD open + helix decoder init (~25KB)
+   — and it ran directly on whichever task called it (here the 3KB input
+   task, also a stack-overflow and cross-core race risk);
+3. album art loading had no heap guard and would have been next.
+
+**Fixes:**
+
+- `doShowScreen` now deletes the outgoing tree **before** building the new
+  one — peak is max(old, new), not the sum. LVGL can't have its active
+  screen deleted, so a bare placeholder screen (~150B) bridges the gap (one
+  blank frame). Heap is logged at every switch.
+- `AudioMgr::play()/stop()` are now deferred requests executed by
+  `AudioMgr::loop()` on the audio task (6KB stack, same task as the decode
+  loop — no cross-core pipeline races, nothing heavy on the input task).
+- `Storage::loadArtFile` skips the art (with a log) when
+  `getMaxAllocHeap() < artSize + 12KB` — a missing cover beats an OOM crash.
+
+**Lesson:** LVGL 8 with `LV_MEM_CUSTOM` malloc does NOT survive allocation
+failure — `lv_obj_class_create_obj`'s realloc is unchecked. Any LVGL tree
+construction must be preceded by enough guaranteed headroom; guards like the
+song-list `HEAP_FLOOR` are load-bearing, not defensive fluff.
+
 ### Static RAM (build-time, `pio run -e esp32dev`)
 
 - Before: 59,892 bytes (18.3%) static, 1,638,825 flash.

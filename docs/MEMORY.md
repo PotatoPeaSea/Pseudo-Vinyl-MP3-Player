@@ -20,7 +20,7 @@ sketch starts with roughly **~250–290KB of free heap** — and that must hold
 | LVGL draw buffers | 9.6KB (was 28.8KB) | 10 rows × 2 buffers, DMA-capable internal RAM |
 | LVGL widget tree | ~700 bytes per song-list button | Scales with library size |
 | BT audio ring buffer | 10KB (8KB stuttered, 16KB broke the budget) | ~58ms of 44.1kHz stereo PCM |
-| Bluedroid media path (post-connect) | ~28KB, allocated AFTER `state=2` | Must not race FATFS; SD mount gates on `isStreaming()` |
+| Bluedroid media path (post-connect) | ~0.5KB once serialized | Earlier ~28KB reading was the concurrently racing FATFS mount. Still must not race FATFS: SD mount gates on `isStreaming()` |
 | MP3 decode (helix) | ~25KB | Chosen because it runs from internal SRAM |
 | Task stacks | 3KB + 8KB + 6KB | input / ui / audio — each needs a *contiguous* block |
 
@@ -183,10 +183,12 @@ could never pass.
 **Cause:** The two fixes added **+33KB of permanent residents** (decoder
 25KB + buffer growth 8KB) without rebalancing. Media start then ran with a
 12.3KB largest block — and it *raced the FATFS mount*, since both were
-triggered by the same connect event. Bluedroid's media path allocates
-*after* the connect (observed: ~28KB between `state=2` and steady state);
-starved of that, it stalls with no error at `CORE_DEBUG_LEVEL=1` — the
-audio state still says "started".
+triggered by the same connect event. (A later serialized run showed the
+media path itself only takes ~0.5KB after `state=2` — the ~28KB seen
+vanishing in the racing run was the concurrent FATFS mount. The kill
+mechanism was the race under a 12KB-largest heap, not a large media
+allocation.) The stream stalls with no error at `CORE_DEBUG_LEVEL=1` —
+the audio state still says "started".
 
 **Fixes:**
 

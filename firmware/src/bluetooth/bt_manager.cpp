@@ -2,6 +2,7 @@
 #include "../config.h"
 #include <BluetoothA2DPSource.h>
 #include <Preferences.h>
+#include <esp_bt.h>   // esp_bt_sleep_disable
 #include <freertos/FreeRTOS.h>
 #include <freertos/ringbuf.h>
 
@@ -157,6 +158,14 @@ void BtMgr::start() {
     // (JBL, etc.). Without it the ESP32 falls back to legacy PIN pairing.
     a2dp.set_ssp_enabled(true);
     a2dp.start();
+
+    // Disable BT modem sleep (sniff-mode power save). With it on, the radio
+    // periodically idles and source-mode A2DP audio chops at the speaker
+    // even though the PCM pipeline is healthy — hardware showed stutter
+    // with ZERO ring-buffer underruns/timeouts, i.e. the loss was after
+    // the data callback, on the radio link.
+    esp_err_t slp = esp_bt_sleep_disable();
+    Serial.printf("[BT] modem sleep disabled: %s\n", esp_err_to_name(slp));
 
     started = true;
     Serial.println("[BT] A2DP source started, discovering...");

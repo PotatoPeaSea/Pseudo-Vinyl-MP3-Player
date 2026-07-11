@@ -21,6 +21,14 @@ static volatile bool listDirty = false;
 
 // ── A2DP callbacks (run on BT stack task) ───────────────────
 
+// Stutter diagnosis counters, logged rate-limited from the callbacks.
+// Underruns = consumer outran the producer (zero-fill went to the speaker).
+// Send timeouts = producer outran the consumer for >500ms (PCM was dropped).
+// Underruns while playing → jitter or a decode rate below 44.1k stereo;
+// see docs/MEMORY.md.
+static volatile uint32_t underrunBytes = 0;
+static volatile uint32_t sendTimeouts = 0;
+
 // Feed PCM to the BT stack; zero-fill on underrun so the stream never stalls
 static int32_t dataCallback(uint8_t *data, int32_t len) {
     size_t got = 0;
@@ -34,6 +42,17 @@ static int32_t dataCallback(uint8_t *data, int32_t len) {
     }
     if (got < (size_t)len) {
         memset(data + got, 0, len - got);
+
+        underrunBytes += len - got;
+        static uint32_t lastLog = 0;
+        uint32_t now = millis();
+        if (now - lastLog > 2000) {
+            lastLog = now;
+            // 176400 bytes/s at 44.1k stereo → /176 ≈ ms of silence inserted
+            Serial.printf("[BT] underrun: %u bytes (~%u ms) zero-filled in last 2s\n",
+                          underrunBytes, underrunBytes / 176);
+            underrunBytes = 0;
+        }
     }
     return len;
 }
@@ -190,6 +209,16 @@ size_t BtMgr::writeAudio(const uint8_t *data, size_t len) {
     }
     if (xRingbufferSend(audioRb, data, len, pdMS_TO_TICKS(500)) == pdTRUE) {
         return len;
+    }
+    // Full buffer for 500ms straight = consumer stalled; this PCM is lost
+    sendTimeouts++;
+    static uint32_t lastLog = 0;
+    uint32_t now = millis();
+    if (now - lastLog > 2000) {
+        lastLog = now;
+        Serial.printf("[BT] ringbuf send timeout x%u (consumer stalled, PCM dropped)\n",
+                      sendTimeouts);
+        sendTimeouts = 0;
     }
     return 0;
 }

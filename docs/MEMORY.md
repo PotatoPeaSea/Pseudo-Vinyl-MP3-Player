@@ -19,7 +19,7 @@ sketch starts with roughly **~250–290KB of free heap** — and that must hold
 | SD / FATFS mount | ~80KB retained while mounted | Also badly fragments the heap (largest free block drops to ~20KB) |
 | LVGL draw buffers | 9.6KB (was 28.8KB) | 10 rows × 2 buffers, DMA-capable internal RAM |
 | LVGL widget tree | ~700 bytes per song-list button | Scales with library size |
-| BT audio ring buffer | 8KB (was 16KB) | ~46ms of 44.1kHz stereo PCM |
+| BT audio ring buffer | 16KB (8KB stuttered) | ~92ms of 44.1kHz stereo PCM |
 | MP3 decode (helix) | ~25KB | Chosen because it runs from internal SRAM |
 | Task stacks | 3KB + 8KB + 6KB | input / ui / audio — each needs a *contiguous* block |
 
@@ -53,7 +53,9 @@ The PCM5102 wired output couldn't fit next to the BT stack. Output is now
 - LVGL draw buffers: 28.8KB → **9.6KB** (10 rows × 2 buffers), with a static
   single-buffer fallback if even that allocation fails
   (`display_manager.cpp`).
-- BT PCM ring buffer: 16KB → **8KB** (~46ms of audio) in `config.h`.
+- BT PCM ring buffer: 16KB → 8KB (~46ms of audio) in `config.h`.
+  **Reverted to 16KB** after hardware playback stuttered — see "BT ring
+  buffer" under the ram-squeeze section.
 
 ### 4. Song list could NULL-deref LVGL allocations
 
@@ -162,8 +164,13 @@ the LVGL tree directly.
 
 ### Deliberately NOT shrunk
 
-- **BT PCM ring buffer stays 8KB** — smaller means audible dropouts, and
-  audio integrity is the device's core function, not "loading".
+- **BT PCM ring buffer: back to 16KB** (~92ms cushion). The squeeze to 8KB
+  (46ms) stuttered on hardware once real playback worked — any producer
+  hiccup (SD-read stall, decode burst timing) longer than the cushion
+  reaches the speaker as a gap. The data callback and `writeAudio` now log
+  underruns / send-timeouts (rate-limited) so buffer-health is measurable,
+  not guessed. Allocated once at boot; the connect handshake still had
+  ~65KB largest available with the 16KB buffer in place.
 - **Task stacks unchanged** (3K/8K/6K) — no hardware high-water-mark data to
   justify trims; a stack overflow is a crash, not a slowdown.
 - BLE controller memory: already released — the ESP32-A2DP library runs the

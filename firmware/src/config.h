@@ -62,7 +62,10 @@
 
 // ── Bluetooth ───────────────────────────────────────────────
 #define BT_DEVICE_NAME      "Pseudo Vinyl"
-#define BT_RINGBUF_BYTES    (8 * 1024)    // ~46ms of 44.1k stereo PCM (heap-constrained)
+// ~92ms of 44.1k stereo PCM. 8KB (46ms) stuttered on hardware: one SD-read
+// stall or decode hiccup longer than the cushion drains it audibly.
+// Allocated once at boot (BtMgr::start), so the cost is deterministic.
+#define BT_RINGBUF_BYTES    (16 * 1024)
 // Cap on the discovery list — every entry costs a String on the heap and a
 // ~700-byte LVGL button; without a cap a busy radio environment grows it
 // unbounded.

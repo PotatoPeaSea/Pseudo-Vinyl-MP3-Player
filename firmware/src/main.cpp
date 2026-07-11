@@ -47,6 +47,30 @@ void audioTask(void *param) {
     }
 }
 
+// Deferred SD mount. FATFS fragments the heap down to a ~20KB largest block,
+// which starves the A2DP connection handshake (it needs a ~50KB contiguous
+// block transiently). So we wait until a speaker is connected — by then A2DP
+// has finished its memory-hungry setup and retains only ~5KB — then mount the
+// card and build the song list. Runs on the UI task so all LVGL access stays
+// single-threaded.
+static void maybeMountStorage() {
+    static bool storageReady = false;
+    if (storageReady || !BtMgr::isConnected()) return;
+    storageReady = true;
+
+    Serial.printf("[Storage] BT up — mounting SD (free=%u largest=%u)\n",
+                  ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+    if (Storage::init()) {
+        songs = Storage::scanMusic("/");
+        AudioMgr::setPlaylist(songs);
+        UI::setSongList(songs);
+        Serial.printf("[Storage] %d songs loaded (free=%u largest=%u)\n",
+                      songs.size(), ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+    } else {
+        Serial.println("[Storage] SD mount FAILED");
+    }
+}
+
 // ═══════════════════════════════════════════════════════════
 // UI TASK (Core 1) — LVGL refresh + state sync
 // ═══════════════════════════════════════════════════════════
@@ -57,6 +81,8 @@ void uiTask(void *param) {
     uint32_t lastBtPoll = 0;
 
     for (;;) {
+        maybeMountStorage();   // one-time, once a speaker connects
+
         // Update now-playing info
         const SongInfo *current = AudioMgr::currentSong();
         UI::setNowPlaying(current, AudioMgr::isPlaying());
@@ -225,16 +251,12 @@ void setup() {
     Serial.printf("[Heap] after BT/audio: free=%u largest=%u\n",
                   ESP.getFreeHeap(), ESP.getMaxAllocHeap());
 
-    // 4. SD Card (mounted last — FATFS holds ~80KB while mounted)
-    if (Storage::init()) {
-        songs = Storage::scanMusic("/");
-        AudioMgr::setPlaylist(songs);
-        UI::setSongList(songs);
-        Serial.printf("[Boot] %d songs loaded\n", songs.size());
-    } else {
-        Serial.println("[Boot] WARNING: No SD card!");
-    }
-    Serial.printf("[Heap] after SD: free=%u largest=%u\n",
+    // 4. SD is deliberately NOT mounted here. Mounting FATFS fragments the heap
+    //    down to a ~20KB largest block, and the A2DP connection handshake needs
+    //    a ~50KB contiguous block *transiently* to complete (it retains only
+    //    ~5KB once connected). So we defer the SD mount + song scan until after
+    //    a speaker is connected — see maybeMountStorage() in loop().
+    Serial.printf("[Heap] before tasks: free=%u largest=%u\n",
                   ESP.getFreeHeap(), ESP.getMaxAllocHeap());
 
     // 5. Spawn FreeRTOS tasks. Heap is tight after the BT stack + FATFS mount,

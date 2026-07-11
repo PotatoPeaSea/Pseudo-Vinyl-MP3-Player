@@ -56,11 +56,22 @@ static bool ssidCallback(const char *ssid, esp_bd_addr_t address, int rssi) {
 
 static void connectionStateChanged(esp_a2d_connection_state_t state, void *) {
     connected = (state == ESP_A2D_CONNECTION_STATE_CONNECTED);
-    if (connected) {
-        connectedDev = targetName;
-        Serial.printf("[BT] Connected to %s\n", connectedDev.c_str());
-    } else {
-        Serial.println("[BT] Disconnected");
+    Serial.printf("[BT] state=%d free=%u largest=%u\n", (int)state,
+                  ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+    switch (state) {
+        case ESP_A2D_CONNECTION_STATE_CONNECTED:
+            connectedDev = targetName;
+            Serial.printf("[BT] Connected to %s\n", connectedDev.c_str());
+            break;
+        case ESP_A2D_CONNECTION_STATE_CONNECTING:
+            Serial.println("[BT] Connecting...");
+            break;
+        case ESP_A2D_CONNECTION_STATE_DISCONNECTING:
+            Serial.println("[BT] Disconnecting...");
+            break;
+        default:
+            Serial.println("[BT] Disconnected");
+            break;
     }
 }
 
@@ -90,7 +101,15 @@ void BtMgr::start() {
     a2dp.set_ssid_callback(ssidCallback);
     a2dp.set_data_callback(dataCallback);
     a2dp.set_on_connection_state_changed(connectionStateChanged);
-    a2dp.set_auto_reconnect(true);
+    // Auto-reconnect OFF: with a saved address the library hammers a direct
+    // connect (retries x1000) and never runs an inquiry scan, so no devices
+    // ever appear in the UI list. We instead rely on continuous discovery +
+    // the ssid_callback to auto-connect when the target is seen, which keeps
+    // the scan list populated.
+    a2dp.set_auto_reconnect(false);
+    // Secure Simple Pairing ("Just Works") — required by modern BT speakers
+    // (JBL, etc.). Without it the ESP32 falls back to legacy PIN pairing.
+    a2dp.set_ssp_enabled(true);
     a2dp.start();
 
     started = true;
@@ -118,6 +137,7 @@ String BtMgr::connectedName() {
 }
 
 void BtMgr::setTarget(const String &name) {
+    if (name == targetName) return;   // no change — avoid redundant NVS writes
     targetName = name;
     prefs.putString("target", name);
     Serial.printf("[BT] Target set: %s\n", name.c_str());

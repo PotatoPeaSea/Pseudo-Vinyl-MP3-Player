@@ -346,7 +346,11 @@ static void populateSongList() {
     // no-PSRAM WROOM-32 the Classic-BT/A2DP stack leaves little headroom.
     // Each list button is ~700 bytes; stop before we run the heap dry so we
     // degrade gracefully instead of dereferencing a NULL LVGL allocation.
-    const uint32_t HEAP_FLOOR = 20000;
+    // 11KB: with BT media running + resident decoder, largest sits ~12-16KB
+    // in steady state — a 20KB floor could never pass and truncated the
+    // list at 0. LVGL's per-button allocs are small, so this floor only
+    // needs to keep the system's working margin, not fit a big block.
+    const uint32_t HEAP_FLOOR = 11000;
     size_t built = 0;
     for (size_t i = 0; i < songLib->size(); i++) {
         if (ESP.getMaxAllocHeap() < HEAP_FLOOR) {

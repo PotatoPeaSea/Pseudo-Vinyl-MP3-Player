@@ -62,10 +62,11 @@
 
 // ── Bluetooth ───────────────────────────────────────────────
 #define BT_DEVICE_NAME      "Pseudo Vinyl"
-// ~92ms of 44.1k stereo PCM. 8KB (46ms) stuttered on hardware: one SD-read
-// stall or decode hiccup longer than the cushion drains it audibly.
-// Allocated once at boot (BtMgr::start), so the cost is deterministic.
-#define BT_RINGBUF_BYTES    (16 * 1024)
+// ~58ms of 44.1k stereo PCM. 8KB (46ms) stuttered on hardware; 16KB starved
+// the Bluedroid media path (+ resident decoder) and killed the stream
+// entirely. 10KB is the compromise — underrun telemetry in the data
+// callback measures whether it is enough. Allocated once at boot.
+#define BT_RINGBUF_BYTES    (10 * 1024)
 // Cap on the discovery list — every entry costs a String on the heap and a
 // ~700-byte LVGL button; without a cap a busy radio environment grows it
 // unbounded.

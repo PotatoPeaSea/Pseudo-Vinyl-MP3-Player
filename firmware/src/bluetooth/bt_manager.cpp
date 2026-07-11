@@ -13,6 +13,7 @@ static Preferences prefs;
 static String targetName;
 static volatile bool started = false;
 static volatile bool connected = false;
+static volatile bool streaming = false;   // A2DP media stream running
 static String connectedDev;
 
 static std::vector<BtDevice> found;
@@ -28,6 +29,7 @@ static volatile bool listDirty = false;
 // see docs/MEMORY.md.
 static volatile uint32_t underrunBytes = 0;
 static volatile uint32_t sendTimeouts = 0;
+static volatile uint32_t lastProducerWrite = 0;   // millis() of last writeAudio
 
 // Feed PCM to the BT stack; zero-fill on underrun so the stream never stalls
 static int32_t dataCallback(uint8_t *data, int32_t len) {
@@ -43,15 +45,19 @@ static int32_t dataCallback(uint8_t *data, int32_t len) {
     if (got < (size_t)len) {
         memset(data + got, 0, len - got);
 
-        underrunBytes += len - got;
-        static uint32_t lastLog = 0;
+        // Only count as an underrun if the producer wrote recently —
+        // draining silence while nothing is playing is expected, not a fault
         uint32_t now = millis();
-        if (now - lastLog > 2000) {
-            lastLog = now;
-            // 176400 bytes/s at 44.1k stereo → /176 ≈ ms of silence inserted
-            Serial.printf("[BT] underrun: %u bytes (~%u ms) zero-filled in last 2s\n",
-                          underrunBytes, underrunBytes / 176);
-            underrunBytes = 0;
+        if (now - lastProducerWrite < 1000) {
+            underrunBytes += len - got;
+            static uint32_t lastLog = 0;
+            if (now - lastLog > 2000) {
+                lastLog = now;
+                // 176400 bytes/s at 44.1k stereo → /176 ≈ ms of silence inserted
+                Serial.printf("[BT] underrun: %u bytes (~%u ms) zero-filled in last 2s\n",
+                              underrunBytes, underrunBytes / 176);
+                underrunBytes = 0;
+            }
         }
     }
     return len;
@@ -98,6 +104,7 @@ static void connectionStateChanged(esp_a2d_connection_state_t state, void *) {
             Serial.println("[BT] Disconnecting...");
             break;
         default:
+            streaming = false;   // no media stream without a connection
             Serial.println("[BT] Disconnected");
             break;
     }
@@ -107,8 +114,9 @@ static void connectionStateChanged(esp_a2d_connection_state_t state, void *) {
 // (2). If this never logs 2 after a connect, the media-start handshake
 // failed — playback will be silent with the ring buffer stuck full.
 static void audioStateChanged(esp_a2d_audio_state_t state, void *) {
+    streaming = (state == ESP_A2D_AUDIO_STATE_STARTED);
     Serial.printf("[BT] audio state=%d%s free=%u largest=%u\n", (int)state,
-                  state == ESP_A2D_AUDIO_STATE_STARTED ? " (streaming)" : "",
+                  streaming ? " (streaming)" : "",
                   ESP.getFreeHeap(), ESP.getMaxAllocHeap());
 }
 
@@ -159,6 +167,7 @@ void BtMgr::stop() {
     a2dp.end(false);   // keep BT controller memory so we can restart
     started = false;
     connected = false;
+    streaming = false;
     Serial.println("[BT] A2DP source stopped");
 }
 
@@ -168,6 +177,10 @@ bool BtMgr::isStarted() {
 
 bool BtMgr::isConnected() {
     return connected;
+}
+
+bool BtMgr::isStreaming() {
+    return streaming;
 }
 
 String BtMgr::connectedName() {
@@ -207,6 +220,7 @@ size_t BtMgr::writeAudio(const uint8_t *data, size_t len) {
     if (!started || !connected || !audioRb) {
         return len;   // drop silently; caller gates on isConnected()
     }
+    lastProducerWrite = millis();
     if (xRingbufferSend(audioRb, data, len, pdMS_TO_TICKS(500)) == pdTRUE) {
         return len;
     }

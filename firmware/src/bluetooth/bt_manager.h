@@ -32,6 +32,11 @@ namespace BtMgr {
 
     bool isStarted();
     bool isConnected();
+    /// True once the A2DP media stream is running (data callback pulling).
+    /// Big allocations (FATFS mount etc.) must wait for this: Bluedroid's
+    /// media path allocates AFTER the connect event, and starving it kills
+    /// audio silently.
+    bool isStreaming();
     String connectedName();
 
     /// Set the device to connect to (persists to NVS)

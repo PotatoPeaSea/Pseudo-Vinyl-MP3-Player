@@ -19,7 +19,8 @@ sketch starts with roughly **~250–290KB of free heap** — and that must hold
 | SD / FATFS mount | ~80KB retained while mounted | Also badly fragments the heap (largest free block drops to ~20KB) |
 | LVGL draw buffers | 9.6KB (was 28.8KB) | 10 rows × 2 buffers, DMA-capable internal RAM |
 | LVGL widget tree | ~700 bytes per song-list button | Scales with library size |
-| BT audio ring buffer | 16KB (8KB stuttered) | ~92ms of 44.1kHz stereo PCM |
+| BT audio ring buffer | 10KB (8KB stuttered, 16KB broke the budget) | ~58ms of 44.1kHz stereo PCM |
+| Bluedroid media path (post-connect) | ~28KB, allocated AFTER `state=2` | Must not race FATFS; SD mount gates on `isStreaming()` |
 | MP3 decode (helix) | ~25KB | Chosen because it runs from internal SRAM |
 | Task stacks | 3KB + 8KB + 6KB | input / ui / audio — each needs a *contiguous* block |
 
@@ -164,13 +165,46 @@ the LVGL tree directly.
 
 ### Deliberately NOT shrunk
 
-- **BT PCM ring buffer: back to 16KB** (~92ms cushion). The squeeze to 8KB
-  (46ms) stuttered on hardware once real playback worked — any producer
-  hiccup (SD-read stall, decode burst timing) longer than the cushion
-  reaches the speaker as a gap. The data callback and `writeAudio` now log
-  underruns / send-timeouts (rate-limited) so buffer-health is measurable,
-  not guessed. Allocated once at boot; the connect handshake still had
-  ~65KB largest available with the 16KB buffer in place.
+- **BT PCM ring buffer: 10KB** (~58ms cushion). The squeeze to 8KB (46ms)
+  stuttered on hardware once real playback worked; the first fix attempt
+  (16KB) overshot the budget and killed the stream entirely (next section).
+  The data callback and `writeAudio` log underruns / send-timeouts
+  (rate-limited) so buffer-health is measurable, not guessed.
+
+### The heap budget must close: 16KB buffer + resident decoder killed the stream
+
+**Symptom:** After the resident-decoder fix and a 16KB ring buffer, the
+telemetry showed the Bluedroid media path made exactly ONE data request
+(512 bytes, zero-filled) after `audio state=2` and then went permanently
+silent — play produced only `ringbuf send timeout (consumer stalled)`. On
+the same run: `[UI] Song list truncated at 0/15` — the 20KB list floor
+could never pass.
+
+**Cause:** The two fixes added **+33KB of permanent residents** (decoder
+25KB + buffer growth 8KB) without rebalancing. Media start then ran with a
+12.3KB largest block — and it *raced the FATFS mount*, since both were
+triggered by the same connect event. Bluedroid's media path allocates
+*after* the connect (observed: ~28KB between `state=2` and steady state);
+starved of that, it stalls with no error at `CORE_DEBUG_LEVEL=1` — the
+audio state still says "started".
+
+**Fixes:**
+
+- **Sequencing:** the SD mount now waits for `BtMgr::isStreaming()` (audio
+  state STARTED, tracked from the audio-state callback) instead of
+  `isConnected()` — Bluedroid finishes ALL its allocations against a clean
+  heap before FATFS fragments it.
+- **Rebalance:** ring buffer 16KB → 10KB; song-list floor 20KB → 11KB
+  (largest sits ~12–16KB in steady state now, and LVGL's per-button allocs
+  are small — the old floor assumed a roomier heap).
+- Underrun telemetry only counts when the producer wrote within the last
+  second, so idle silence-streaming doesn't spam the log — and a healthy
+  idle consumer is now visible as the *absence* of noise.
+
+**Lesson:** every "fix" that pins memory must re-close the whole budget.
+The order of allocation matters as much as the amount: same totals, but
+media-start-then-FATFS works where the race dies. Connected ≠ streaming;
+gate on the state you actually need.
 - **Task stacks unchanged** (3K/8K/6K) — no hardware high-water-mark data to
   justify trims; a stack overflow is a crash, not a slowdown.
 - BLE controller memory: already released — the ESP32-A2DP library runs the

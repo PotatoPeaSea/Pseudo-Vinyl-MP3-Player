@@ -49,14 +49,15 @@ void audioTask(void *param) {
 }
 
 // Deferred SD mount. FATFS fragments the heap down to a ~20KB largest block,
-// which starves the A2DP connection handshake (it needs a ~50KB contiguous
-// block transiently). So we wait until a speaker is connected — by then A2DP
-// has finished its memory-hungry setup and retains only ~5KB — then mount the
-// card and build the song list. Runs on the UI task so all LVGL access stays
+// which starves the A2DP connection handshake (~50KB contiguous, transient)
+// AND the media-start path (~28KB after the connect event — racing it killed
+// the data callback silently: hardware showed one pull then a dead stream).
+// So we wait for isStreaming(), not just isConnected(): by then Bluedroid is
+// fully allocated. Runs on the UI task so all LVGL access stays
 // single-threaded.
 static void maybeMountStorage() {
     static bool storageReady = false;
-    if (storageReady || !BtMgr::isConnected()) return;
+    if (storageReady || !BtMgr::isStreaming()) return;
     storageReady = true;
 
     Serial.printf("[Storage] BT up — mounting SD (free=%u largest=%u)\n",

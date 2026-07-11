@@ -172,7 +172,12 @@ the LVGL tree directly.
 
 ### Static RAM (build-time, `pio run -e esp32dev`)
 
-- After this pass: **51,996 bytes (15.9%)** static; the heap gains above are
-  runtime and show up in the `free=/largest=` boot logs instead.
+- Before: 59,892 bytes (18.3%) static, 1,638,825 flash.
+- After: **51,996 bytes (15.9%)** static, 1,605,833 flash — **−7.9KB static
+  RAM** (mostly the removed display fallback buffer + trimmed LVGL .bss).
+- The bigger wins are on the heap at runtime (loopTask stack, three screens'
+  widget trees, duplicate song vectors, theme styles, second draw buffer,
+  off-screen art, idle decoder) and show up in the `free=/largest=` boot
+  logs, not the build-time number.
 - Boot now builds ONE screen instead of four, so the heap is also healthier
   at the moment Bluedroid initializes.

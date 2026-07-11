@@ -62,6 +62,15 @@ static void connectionStateChanged(esp_a2d_connection_state_t state, void *) {
         case ESP_A2D_CONNECTION_STATE_CONNECTED:
             connectedDev = targetName;
             Serial.printf("[BT] Connected to %s\n", connectedDev.c_str());
+            // Kick the media-start handshake NOW, while the heap still has
+            // large blocks. The library's own trigger is a 10s heartbeat —
+            // by then play() may have fragmented the heap below what
+            // Bluedroid's media task needs at START, and the stream then
+            // sits in IDLE forever: the data callback never runs and the
+            // PCM ring buffer stays full ("Could not write result to out").
+            // The ACK lands in the library's state machine, which issues
+            // MEDIA_CTRL_START; its heartbeat remains as the retry path.
+            esp_a2d_media_ctrl(ESP_A2D_MEDIA_CTRL_CHECK_SRC_RDY);
             break;
         case ESP_A2D_CONNECTION_STATE_CONNECTING:
             Serial.println("[BT] Connecting...");
@@ -73,6 +82,15 @@ static void connectionStateChanged(esp_a2d_connection_state_t state, void *) {
             Serial.println("[BT] Disconnected");
             break;
     }
+}
+
+// The stack only pulls from the ring buffer while audio state is STARTED
+// (2). If this never logs 2 after a connect, the media-start handshake
+// failed — playback will be silent with the ring buffer stuck full.
+static void audioStateChanged(esp_a2d_audio_state_t state, void *) {
+    Serial.printf("[BT] audio state=%d%s free=%u largest=%u\n", (int)state,
+                  state == ESP_A2D_AUDIO_STATE_STARTED ? " (streaming)" : "",
+                  ESP.getFreeHeap(), ESP.getMaxAllocHeap());
 }
 
 // ── Public API ──────────────────────────────────────────────
@@ -101,6 +119,7 @@ void BtMgr::start() {
     a2dp.set_ssid_callback(ssidCallback);
     a2dp.set_data_callback(dataCallback);
     a2dp.set_on_connection_state_changed(connectionStateChanged);
+    a2dp.set_on_audio_state_changed(audioStateChanged);
     // Auto-reconnect OFF: with a saved address the library hammers a direct
     // connect (retries x1000) and never runs an inquiry scan, so no devices
     // ever appear in the UI list. We instead rely on continuous discovery +

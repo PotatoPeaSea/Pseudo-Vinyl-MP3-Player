@@ -11,9 +11,10 @@
  *
  * Controls:
  *   Now Playing: PLAY=play/pause, NEXT/PREV=track, encoder=volume,
- *                encoder press=cycle play mode
+ *                encoder press=back to song list
  *   Menus:       encoder=move focus, PLAY=select, NEXT/PREV=switch screen,
- *                encoder press=back
+ *                encoder press=back (song list press = to Now Playing)
+ *   Play mode:   serial "mode" command only (no physical control yet)
  */
 
 #include <Arduino.h>
@@ -194,14 +195,16 @@ void inputTask(void *param) {
                     break;
 
                 case InputEvent::ENC_PRESS:
-                    if (onNowPlaying) {
-                        AudioMgr::cyclePlayMode();
-                    } else if (screen == Screen::SONG_LIST) {
+                    if (screen == Screen::SONG_LIST) {
                         UI::showScreen(Screen::NOW_PLAYING);
                     } else {
-                        // Back to song list from Settings/Bluetooth
+                        // Back to song list from Now Playing/Settings/Bluetooth
                         UI::showScreen(Screen::SONG_LIST);
                     }
+                    break;
+
+                case InputEvent::MODE_CYCLE:
+                    AudioMgr::cyclePlayMode();
                     break;
 
                 default:

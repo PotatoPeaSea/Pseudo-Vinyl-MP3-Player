@@ -19,7 +19,8 @@ static const Command COMMANDS[] = {
     { "prev",  'b', InputEvent::BTN_PREV,  "PREV button (prev track, prev screen)" },
     { "cw",    '+', InputEvent::ENC_CW,    "Encoder clockwise (vol up, focus next)" },
     { "ccw",   '-', InputEvent::ENC_CCW,   "Encoder counter-clockwise (vol down, focus prev)" },
-    { "press", 'e', InputEvent::ENC_PRESS, "Encoder push (cycle mode, back in menus)" },
+    { "press", 'e', InputEvent::ENC_PRESS, "Encoder push (back / to Now Playing)" },
+    { "mode",  'm', InputEvent::MODE_CYCLE, "Cycle play mode (normal/shuffle/repeat)" },
 };
 static const int NUM_COMMANDS = sizeof(COMMANDS) / sizeof(COMMANDS[0]);
 

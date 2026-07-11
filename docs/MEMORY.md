@@ -203,6 +203,39 @@ failure — `lv_obj_class_create_obj`'s realloc is unchecked. Any LVGL tree
 construction must be preceded by enough guaranteed headroom; guards like the
 song-list `HEAP_FLOOR` are load-bearing, not defensive fluff.
 
+### Silent playback #2: A2DP media-start starved by the play-start heap crunch
+
+**Symptom:** Speaker connected, decode running, but no sound; serial spammed
+`libhelix - Could not write result to out: 0 of 4608 written` — the PCM ring
+buffer filled once and never drained. (Distinct from silent-playback #1, the
+unwired `meter.out` pipeline link, fixed just before.)
+
+**Diagnosis (ESP32-A2DP library source):** The A2DP stack only pulls from the
+data callback after a media-start handshake (`CHECK_SRC_RDY` → `START`), and
+the library triggers that from a **10-second heartbeat timer** — not from the
+connect event. Play was pressed within that window, and `doPlay()` (helix
+decoder ~25KB + Now Playing screen build) had already crushed the heap to
+`largest=12276` by the time the first handshake ran. Bluedroid allocates its
+media task + SBC encode buffers at START; the attempt fails, the library
+falls back to IDLE, and every 10s retry fails against the same starved heap
+— permanently, and invisibly at `CORE_DEBUG_LEVEL=1` (the failure logs at
+INFO level).
+
+**Fixes:**
+
+- `connectionStateChanged` now calls
+  `esp_a2d_media_ctrl(ESP_A2D_MEDIA_CTRL_CHECK_SRC_RDY)` the moment the
+  connection completes — the handshake runs while the largest block is still
+  ~73KB, before any play can fragment it. The heartbeat stays as the retry.
+- `set_on_audio_state_changed` registered with a heap log: if
+  `[BT] audio state=2 (streaming)` never appears after a connect, this
+  failure mode is back.
+
+**Lesson:** Bluedroid allocates lazily — connect ≠ ready to stream. Every
+deferred allocation inside the BT stack is a landmine on a heap this tight;
+force them to happen at the moments heap is known-good (same principle as
+the deferred SD mount, but in the opposite direction).
+
 ### Static RAM (build-time, `pio run -e esp32dev`)
 
 - Before: 59,892 bytes (18.3%) static, 1,638,825 flash.

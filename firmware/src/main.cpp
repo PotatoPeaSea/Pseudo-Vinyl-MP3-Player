@@ -208,6 +208,10 @@ void inputTask(void *param) {
                     AudioMgr::cyclePlayMode();
                     break;
 
+                case InputEvent::TONE_TEST:
+                    AudioMgr::toggleToneTest();
+                    break;
+
                 default:
                     break;
             }

@@ -21,6 +21,7 @@ static const Command COMMANDS[] = {
     { "ccw",   '-', InputEvent::ENC_CCW,   "Encoder counter-clockwise (vol down, focus prev)" },
     { "press", 'e', InputEvent::ENC_PRESS, "Encoder push (back / to Now Playing)" },
     { "mode",  'm', InputEvent::MODE_CYCLE, "Cycle play mode (normal/shuffle/repeat)" },
+    { "tone",  't', InputEvent::TONE_TEST,  "Toggle 440Hz test tone (bypasses SD+MP3)" },
 };
 static const int NUM_COMMANDS = sizeof(COMMANDS) / sizeof(COMMANDS[0]);
 

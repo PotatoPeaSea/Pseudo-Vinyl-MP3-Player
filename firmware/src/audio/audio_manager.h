@@ -47,6 +47,12 @@ namespace AudioMgr {
     PlayMode getPlayMode();
     void cyclePlayMode();       // Normal -> Shuffle -> Repeat All -> Repeat One
 
+    /// Diagnostic: toggle a generated 440Hz sine streamed straight to the
+    /// BT ring buffer — bypasses SD + MP3 decode. Isolates whether stutter
+    /// comes from the radio/sink (tone stutters too) or the SD/decode path
+    /// (tone is clean). Stops any current playback when enabled.
+    void toggleToneTest();
+
     /// Status queries
     bool isPlaying();
     int  currentIndex();

@@ -17,6 +17,7 @@ enum class InputEvent : uint8_t {
     ENC_CCW,            // Encoder rotated counter-clockwise (volume down)
     ENC_PRESS,          // Encoder shaft pressed (back to song list)
     MODE_CYCLE,         // Cycle play mode (debug console only — no physical control yet)
+    TONE_TEST,          // Toggle diagnostic sine tone (debug console only)
 };
 
 namespace Input {

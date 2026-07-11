@@ -59,6 +59,7 @@ static volatile bool playing = false;
 // AudioMgr::loop() (audio task) executes it.
 static volatile int pendingPlayIdx = -1;
 static volatile bool pendingStop = false;
+static volatile bool toneTest = false;   // diagnostic sine replaces playback
 static PlayMode playMode = PlayMode::NORMAL;
 static int volume = DEFAULT_VOLUME;
 
@@ -193,6 +194,25 @@ static void doPlay(int index) {
                   ESP.getFreeHeap(), ESP.getMaxAllocHeap());
 }
 
+// Diagnostic tone: 440Hz sine, 44.1kHz stereo int16, written directly to
+// the BT ring buffer. No SD, no decoder, no LVGL involvement — if THIS
+// stutters at the speaker, the fault is radio/sink-side. The blocking
+// ring-buffer send paces generation to the consumer's real drain rate.
+static void toneTick() {
+    static float phase = 0.0f;
+    static int16_t block[512 * 2];   // 512 frames, ~11.6ms of audio
+
+    const float step = 2.0f * PI * 440.0f / 44100.0f;
+    for (int i = 0; i < 512; i++) {
+        int16_t s = (int16_t)(sinf(phase) * 8000.0f);
+        block[i * 2]     = s;
+        block[i * 2 + 1] = s;
+        phase += step;
+        if (phase > 2.0f * PI) phase -= 2.0f * PI;
+    }
+    BtMgr::writeAudio((const uint8_t *)block, sizeof(block));
+}
+
 void AudioMgr::loop() {
     // Execute deferred commands from other tasks
     if (pendingStop) {
@@ -201,6 +221,14 @@ void AudioMgr::loop() {
         closePipeline();
         currentIdx = -1;
         Serial.println("[Audio] Stopped");
+    }
+
+    // Diagnostic tone overrides normal playback (after stop handling, so
+    // toggling the tone on properly closes any current file first)
+    if (toneTest) {
+        if (BtMgr::isConnected()) toneTick();
+        else vTaskDelay(pdMS_TO_TICKS(50));
+        return;
     }
     int req = pendingPlayIdx;
     if (req >= 0) {
@@ -270,6 +298,17 @@ void AudioMgr::resume() {
 
 void AudioMgr::stop() {
     pendingStop = true;   // executed by the audio task in loop()
+}
+
+void AudioMgr::toggleToneTest() {
+    if (!toneTest) {
+        pendingStop = true;   // silence normal playback first
+        toneTest = true;
+        Serial.println("[Audio] TONE TEST ON — 440Hz sine, SD+decoder bypassed");
+    } else {
+        toneTest = false;
+        Serial.println("[Audio] Tone test off");
+    }
 }
 
 void AudioMgr::next() {

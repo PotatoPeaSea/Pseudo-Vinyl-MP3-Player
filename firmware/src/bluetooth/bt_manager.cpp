@@ -43,6 +43,11 @@ static volatile bool reconnectPending = false;
 
 // Feed PCM to the BT stack; zero-fill on underrun so the stream never stalls
 static int32_t dataCallback(uint8_t *data, int32_t len) {
+    // The stack can fire one last request with a NULL buffer during
+    // disconnect teardown — writing into it crashed (StoreProhibited @0)
+    // when the stall watchdog forced a disconnect
+    if (!data || len <= 0) return 0;
+
     size_t got = 0;
     while (got < (size_t)len) {
         size_t itemSize = 0;
@@ -97,15 +102,16 @@ static void connectionStateChanged(esp_a2d_connection_state_t state, void *) {
         case ESP_A2D_CONNECTION_STATE_CONNECTED:
             connectedDev = targetName;
             Serial.printf("[BT] Connected to %s\n", connectedDev.c_str());
-            // Kick the media-start handshake NOW, while the heap still has
-            // large blocks. The library's own trigger is a 10s heartbeat —
-            // by then play() may have fragmented the heap below what
-            // Bluedroid's media task needs at START, and the stream then
-            // sits in IDLE forever: the data callback never runs and the
-            // PCM ring buffer stays full ("Could not write result to out").
-            // The ACK lands in the library's state machine, which issues
-            // MEDIA_CTRL_START; its heartbeat remains as the retry path.
-            esp_a2d_media_ctrl(ESP_A2D_MEDIA_CTRL_CHECK_SRC_RDY);
+            // Media start is left to the library's 10s heartbeat — do NOT
+            // kick esp_a2d_media_ctrl(CHECK_SRC_RDY) from here. This
+            // callback runs before the library's state machine reaches
+            // CONNECTED, and the connecting-state handler re-issues a
+            // CHECK on any media ACK: the two overlapping CHECK→START
+            // sequences intermittently left btc_a2dp_source "started"
+            // with a dead data path (3 of 4 kicked boots on hardware).
+            // The heap-safety reason for the kick is gone anyway: the SD
+            // mount gates on isStreaming(), so the heartbeat-driven start
+            // always runs against the clean pre-FATFS heap.
             break;
         case ESP_A2D_CONNECTION_STATE_CONNECTING:
             Serial.println("[BT] Connecting...");

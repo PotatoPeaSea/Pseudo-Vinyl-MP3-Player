@@ -224,10 +224,22 @@ only a reconnect fixes.
 **Countermeasures** (not memory fixes, recorded here because the trail
 ran through every memory theory first):
 
+- **The connect-time media kick was itself the prime dead-stream suspect
+  and was removed.** Kicking `CHECK_SRC_RDY` from the connection callback
+  races the library's state machine (the connecting-state handler
+  re-issues a CHECK on any media ACK); the two overlapping CHECK→START
+  sequences intermittently left btc_a2dp_source "started" with a dead
+  data path — 3 of 4 kicked boots, vs sound on the unkicked boot. Media
+  start is back on the library's 10s heartbeat; safe now because the SD
+  mount gates on `isStreaming()`, so the start always sees the clean
+  pre-FATFS heap (the kick's original reason).
 - Stall watchdog in `writeAudio`: ~4s of continuous send timeouts while
   connected → force `a2dp.disconnect()` → restart discovery (the library
   does NOT rescan on its own with auto-reconnect off) → ssid callback
-  reconnects → the connect handler kicks a fresh media stream.
+  reconnects → fresh media stream. NOTE: the data callback must
+  NULL-check its buffer — the stack fires one last request with a NULL
+  buffer during disconnect teardown (crashed StoreProhibited @0 before
+  the guard).
 - Audio task moved core 0 → core 1: Bluetooth (controller + host + SBC)
   now owns core 0 outright; SD/decode flash-cache pressure on core 0
   contributed to congestion. Decode (prio 3) preempts LVGL (prio 1) on

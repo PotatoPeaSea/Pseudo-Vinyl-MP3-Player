@@ -147,7 +147,7 @@ Not yet verified on hardware.
 | `ART_MAX_SIDE` 120 → **90** (the vinyl label is 90px — larger was downscaled anyway) | 28.8KB → 16.2KB max art buffer | old 120px `.art` files rejected; re-run prescale_art |
 | Single song library vector; AudioMgr/UI hold pointers (were full copies) | ~2× library cost | none |
 | `SongInfo` slimmed: title derived from filename on demand, `artist` dropped (was always "Unknown") | ~1KB at 15 songs | artist line gone from Now Playing |
-| Helix decoder freed on full stop / playlist end (`decoder.end()`) | ~25KB while idle | slower play-start after stop; realloc could fail on a badly fragmented heap (multiple small allocs, so low risk) |
+| ~~Helix decoder freed on full stop / playlist end~~ **REVERTED** — the "low risk" realloc failure happened on hardware (see "Play-start helix allocation" below); decoder is now allocated once at boot and kept forever | ~~~25KB while idle~~ 0 | none (25KB is a permanent budget line) |
 | Single LVGL draw buffer (10 rows) instead of double | 4.8KB | slower rendering (render waits for SPI flush) |
 | Static display-buffer fallback removed (was always-resident .bss) | 7.7KB | none — `Display::init` runs first, alloc can't fail |
 | LVGL: basic theme (default theme heap-allocates dozens of styles), circle cache 4 → 2, unused widgets/fonts off | ~2–4KB heap + flash | slightly plainer unstyled-widget look |
@@ -235,6 +235,35 @@ INFO level).
 deferred allocation inside the BT stack is a landmine on a heap this tight;
 force them to happen at the moments heap is known-good (same principle as
 the deferred SD mount, but in the opposite direction).
+
+### Play-start helix allocation failed → watchdog reboot
+
+**Symptom:** `libhelix - allocateation failed for 5120 bytes` at play start,
+then a task-watchdog abort ~5s later (`CPU 0: audio` starving `IDLE0`) and
+reboot. **Cause:** The ram-squeeze pass freed the helix decoder while idle
+(rated "low risk" to re-allocate — wrong). At play start, `decoder.begin()`
+on the audio task raced the Now Playing screen build on the UI task for the
+last large blocks (largest was 29.7KB before, 12.3KB after) and lost one
+5KB chunk. Playback then proceeded with a half-initialized decoder, whose
+internal retry loop never yields — tripping the watchdog.
+
+**Fixes:**
+
+- Helix decoder is allocated **once in `AudioMgr::init()` at boot** (heap
+  ~98KB largest) and never freed. The idle-RAM saving is given back: playing
+  music is the device's core function, so its ~25KB is a permanent budget
+  line, not a reclaimable one.
+- `doPlay()` checks `decoder.begin()`'s result and aborts the track cleanly
+  on failure instead of feeding a broken decoder. (Per-track `begin()` is
+  still a free+realloc of the ~25KB — `CommonHelix::begin` calls `end()` on
+  an active decoder — but re-filling just-freed holes has proven reliable
+  even at 12KB largest; it's the *first* allocation under pressure that
+  loses races.)
+
+**Lesson:** "We can re-allocate it later" is only true if *later* has a
+known heap state. Later turned out to be the single worst moment in the
+whole runtime (decoder + screen build + art, three tasks racing). Allocate
+core-function memory at boot, when the heap is deterministic.
 
 ### Static RAM (build-time, `pio run -e esp32dev`)
 

@@ -51,7 +51,6 @@ static Preferences audioPrefs;
 static const std::vector<SongInfo> *playlist = nullptr;
 static volatile int currentIdx = -1;
 static volatile bool playing = false;
-static bool decoderOpen = false;   // helix buffers (~25KB) currently allocated
 
 // Deferred commands: play()/stop() may be called from the input or UI task,
 // but opening the file and (re)initializing the helix decoder is ~25KB of
@@ -134,17 +133,6 @@ static void closePipeline() {
     if (curFile) curFile.close();
 }
 
-// Free the helix decoder buffers (~25KB, split across several allocations)
-// when playback fully stops. play() re-allocates via decoder.begin() —
-// slower to start again, but the RAM is available while idle.
-static void releaseDecoder() {
-    if (!decoderOpen) return;
-    decoder.end();
-    decoderOpen = false;
-    Serial.printf("[Audio] Decoder released (free=%u largest=%u)\n",
-                  ESP.getFreeHeap(), ESP.getMaxAllocHeap());
-}
-
 // ── Public API ──────────────────────────────────────────────
 
 void AudioMgr::init() {
@@ -157,7 +145,17 @@ void AudioMgr::init() {
     applyVolume();
 
     applyOutputRouting();
-    Serial.println("[Audio] Pipeline initialized (helix MP3)");
+
+    // Allocate the helix decoder (~25KB) ONCE, at boot, while the heap is
+    // guaranteed large — and keep it forever. The ram-squeeze pass freed it
+    // while idle, but hardware showed the re-allocation at play start racing
+    // the Now Playing screen build and failing ("libhelix - allocation
+    // failed"), which left a half-initialized decoder spinning the audio
+    // task into the watchdog. Playing music is the core function; its RAM
+    // is a permanent budget line, not a reclaimable one.
+    decoder.begin();
+    Serial.printf("[Audio] Pipeline initialized, helix resident (free=%u largest=%u)\n",
+                  ESP.getFreeHeap(), ESP.getMaxAllocHeap());
 }
 
 // Actually start a track — runs on the audio task only (see doPlay note on
@@ -177,8 +175,17 @@ static void doPlay(int index) {
     curFileSize = curFile.size();
     meter.bytes = 0;
 
-    decoder.begin();
-    decoderOpen = true;
+    // Per-track begin() resets the helix parser. NOTE: on an active decoder
+    // this is a free+realloc of the ~25KB buffers (CommonHelix::begin calls
+    // end() first) — if the realloc loses the race for heap, abort cleanly.
+    // Feeding a half-initialized decoder spins the audio task into the task
+    // watchdog (seen on hardware).
+    if (!decoder.begin()) {
+        Serial.printf("[Audio] Decoder begin FAILED (free=%u largest=%u) — not playing\n",
+                      ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+        closePipeline();
+        return;
+    }
     copier.begin(decoder, curFile);
     playing = true;
     Serial.printf("[Audio] Playing [%d]: %s (free=%u largest=%u)\n",
@@ -192,7 +199,6 @@ void AudioMgr::loop() {
         pendingStop = false;
         pendingPlayIdx = -1;
         closePipeline();
-        releaseDecoder();
         currentIdx = -1;
         Serial.println("[Audio] Stopped");
     }
@@ -229,7 +235,6 @@ void AudioMgr::loop() {
             doPlay(nextIdx);
         } else {
             closePipeline();
-            releaseDecoder();
             currentIdx = -1;
             Serial.println("[Audio] Playlist finished");
         }

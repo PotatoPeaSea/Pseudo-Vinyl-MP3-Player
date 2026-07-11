@@ -122,6 +122,8 @@ static void applyVolume() {
 }
 
 static void applyOutputRouting() {
+    meter.out = &volumeOut;     // decoder → meter → volume; without this the
+                                // meter swallows all PCM and playback is silent
     volumeOut.setOutput(btOut);
     BtMgr::start();
     Serial.println("[Audio] Output: Bluetooth A2DP");

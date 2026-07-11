@@ -2,7 +2,8 @@
 
 Findings, issues, and fixes from getting Bluetooth A2DP, the SD library, and
 the LVGL UI to coexist on the WROOM-32. Everything here comes from hardware
-bring-up on the `feature/bt-only-lowmem` branch (July 2026).
+bring-up on the `feature/bt-only-lowmem` branch (July 2026), plus the
+RAM-minimization pass on `feature/ram-squeeze` (see the section at the end).
 
 ## The core problem
 
@@ -129,3 +130,49 @@ BT+audio, before task creation, at SD mount, after song-list build.
   (~20KB largest). Reconnect behavior needs testing; unmounting SD around
   reconnects may become necessary.
 - A song library over 15 tracks (or long filenames/metadata) will truncate.
+
+## RAM-minimization pass (`feature/ram-squeeze`, July 2026)
+
+A deliberate everything-for-RAM pass; UX regressions (slower screen changes,
+slower play-start after a full stop, smaller art) were accepted by design.
+Not yet verified on hardware.
+
+### What changed
+
+| Change | Saving | UX cost |
+|---|---|---|
+| Arduino loopTask deleted at end of `setup()` (`vTaskDelete(nullptr)`) | ~8KB stack + TCB | none — all work is in our tasks |
+| **Lazy screen lifecycle**: only the active screen's LVGL tree exists; built on show, deleted on switch | ~10–15KB idle (song list alone is ~700B × 15 buttons) | screen switches rebuild widgets (slower, no fade) |
+| Album art freed when leaving Now Playing; re-read from SD on return | up to 16.2KB while browsing | SD read on each return to Now Playing |
+| `ART_MAX_SIDE` 120 → **90** (the vinyl label is 90px — larger was downscaled anyway) | 28.8KB → 16.2KB max art buffer | old 120px `.art` files rejected; re-run prescale_art |
+| Single song library vector; AudioMgr/UI hold pointers (were full copies) | ~2× library cost | none |
+| `SongInfo` slimmed: title derived from filename on demand, `artist` dropped (was always "Unknown") | ~1KB at 15 songs | artist line gone from Now Playing |
+| Helix decoder freed on full stop / playlist end (`decoder.end()`) | ~25KB while idle | slower play-start after stop; realloc could fail on a badly fragmented heap (multiple small allocs, so low risk) |
+| Single LVGL draw buffer (10 rows) instead of double | 4.8KB | slower rendering (render waits for SPI flush) |
+| Static display-buffer fallback removed (was always-resident .bss) | 7.7KB | none — `Display::init` runs first, alloc can't fail |
+| LVGL: basic theme (default theme heap-allocates dozens of styles), circle cache 4 → 2, unused widgets/fonts off | ~2–4KB heap + flash | slightly plainer unstyled-widget look |
+| BT discovery list capped at `MAX_BT_DEVICES` (8) | unbounded → bounded | busy environments show first 8 devices |
+| Per-frame UI setters early-return when unchanged | kills 60Hz `lv_label_set_text` realloc churn (fragmentation!) | none |
+| `CORE_DEBUG_LEVEL` 3 → 1 | mostly flash | fewer IDF logs |
+
+Also fixed while in there: screen switches are now deferred to the UI task
+(`pendingScreen`), because with delete-on-switch a click callback must never
+delete the screen it is running inside, and the input task must never touch
+the LVGL tree directly.
+
+### Deliberately NOT shrunk
+
+- **BT PCM ring buffer stays 8KB** — smaller means audible dropouts, and
+  audio integrity is the device's core function, not "loading".
+- **Task stacks unchanged** (3K/8K/6K) — no hardware high-water-mark data to
+  justify trims; a stack overflow is a crash, not a slowdown.
+- BLE controller memory: already released — the ESP32-A2DP library runs the
+  controller in `ESP_BT_MODE_CLASSIC_BT` and calls
+  `esp_bt_controller_mem_release(ESP_BT_MODE_BLE)` itself.
+
+### Static RAM (build-time, `pio run -e esp32dev`)
+
+- After this pass: **51,996 bytes (15.9%)** static; the heap gains above are
+  runtime and show up in the `free=/largest=` boot logs instead.
+- Boot now builds ONE screen instead of four, so the heap is also healthier
+  at the moment Bluedroid initializes.

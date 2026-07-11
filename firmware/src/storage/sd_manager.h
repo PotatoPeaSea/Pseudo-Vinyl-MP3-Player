@@ -6,10 +6,11 @@
  * SD Card Manager — File system operations
  */
 
+// Kept minimal to save RAM: title is derived from the filepath on demand
+// (Storage::songTitle) instead of being stored per song, and artist was
+// dropped entirely (no ID3 parsing — it was always "Unknown").
 struct SongInfo {
     String filepath;    // Full path on SD card, e.g. "/Music/song.mp3"
-    String title;       // From ID3 tag, or filename
-    String artist;      // From ID3 tag, or "Unknown"
     bool hasArt;        // True if matching .art file exists
 };
 
@@ -22,6 +23,9 @@ namespace Storage {
 
     /// Scan for MP3 files, returns sorted list
     std::vector<SongInfo> scanMusic(const char *rootPath = "/");
+
+    /// Display title for a song: filename without path or extension
+    String songTitle(const SongInfo &song);
 
     /// Load an .art file into a buffer (caller must free with free())
     /// Returns nullptr if file not found; sets outSize to byte count

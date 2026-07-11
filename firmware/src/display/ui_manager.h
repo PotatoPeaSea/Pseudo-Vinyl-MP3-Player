@@ -13,6 +13,11 @@
  *   - Settings (output toggle)
  *   - Bluetooth (device scan/pick)
  *
+ * Only the ACTIVE screen's widget tree exists in RAM — screens are built
+ * on show and deleted on switch (slower screen changes, minimal idle
+ * footprint). showScreen() is safe from any task/callback: the actual
+ * rebuild is deferred to the next UI::update() on the UI task.
+ *
  * Navigation: a virtual LVGL keypad — the input task forwards encoder
  * turns as LV_KEY_NEXT/PREV and the select button as LV_KEY_ENTER via
  * sendKey().
@@ -26,10 +31,10 @@ enum class Screen : uint8_t {
 };
 
 namespace UI {
-    /// Build all LVGL screens (call after Display::init)
+    /// Init styles/input and build the initial screen (call after Display::init)
     void init();
 
-    /// Switch to a screen
+    /// Request a screen switch (applied on the UI task at next update())
     void showScreen(Screen screen);
 
     /// Screen currently shown (kept in sync even for internal navigation)
@@ -42,8 +47,9 @@ namespace UI {
     /// Call every frame from the UI task
     void update();
 
-    /// Song list: populate with scanned songs
-    void setSongList(const std::vector<SongInfo> &songs);
+    /// Song list source. NOT copied — the caller keeps ownership and the
+    /// vector must outlive the UI (it's the app-lifetime library in main.cpp).
+    void setSongList(const std::vector<SongInfo> *songs);
 
     /// Now Playing: update with current song info
     void setNowPlaying(const SongInfo *song, bool playing);

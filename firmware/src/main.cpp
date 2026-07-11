@@ -62,8 +62,9 @@ static void maybeMountStorage() {
                   ESP.getFreeHeap(), ESP.getMaxAllocHeap());
     if (Storage::init()) {
         songs = Storage::scanMusic("/");
-        AudioMgr::setPlaylist(songs);
-        UI::setSongList(songs);
+        // Both take a pointer to the single app-lifetime vector — no copies
+        AudioMgr::setPlaylist(&songs);
+        UI::setSongList(&songs);
         Serial.printf("[Storage] %d songs loaded (free=%u largest=%u)\n",
                       songs.size(), ESP.getFreeHeap(), ESP.getMaxAllocHeap());
     } else {
@@ -274,9 +275,13 @@ void setup() {
     if (ok != pdPASS) Serial.println("[Boot] ERROR: audio task failed to start!");
 
     Serial.printf("[Boot] Tasks launched, free heap=%u\n", ESP.getFreeHeap());
+
+    // 6. setup() runs on the Arduino loopTask, which carries an 8KB stack.
+    //    Everything lives in our own tasks, so delete it — loop() below
+    //    never runs and the stack + TCB return to the heap.
+    vTaskDelete(nullptr);
 }
 
 void loop() {
-    // All work is done in FreeRTOS tasks
-    vTaskDelay(pdMS_TO_TICKS(1000));
+    // Never runs — the loopTask deletes itself at the end of setup()
 }

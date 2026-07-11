@@ -50,12 +50,6 @@ static void scanDir(File dir, std::vector<SongInfo> &songs) {
                     SongInfo info;
                     info.filepath = String(entry.path());
 
-                    // Parse title from filename (strip path and extension)
-                    int lastSlash = info.filepath.lastIndexOf('/');
-                    String basename = info.filepath.substring(lastSlash + 1);
-                    info.title = basename.substring(0, basename.length() - 4);
-                    info.artist = "Unknown";
-
                     // Check for .art file
                     String artPath = info.filepath.substring(0, info.filepath.length() - 4) + ".art";
                     info.hasArt = SD.exists(artPath);
@@ -80,13 +74,20 @@ std::vector<SongInfo> Storage::scanMusic(const char *rootPath) {
     scanDir(root, songs);
     root.close();
 
-    // Sort alphabetically by title
+    // Sort alphabetically by title (derived per comparison — slower, but
+    // avoids storing a title String per song)
     std::sort(songs.begin(), songs.end(), [](const SongInfo &a, const SongInfo &b) {
-        return a.title < b.title;
+        return Storage::songTitle(a) < Storage::songTitle(b);
     });
 
     Serial.printf("[SD] Loaded %d MP3 files (cap %d)\n", songs.size(), MAX_SONGS);
     return songs;
+}
+
+String Storage::songTitle(const SongInfo &song) {
+    int lastSlash = song.filepath.lastIndexOf('/');
+    String basename = song.filepath.substring(lastSlash + 1);
+    return basename.substring(0, basename.length() - 4);   // strip ".mp3"
 }
 
 uint8_t* Storage::loadArtFile(const String &mp3Path, size_t &outSize) {

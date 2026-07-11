@@ -45,7 +45,7 @@ static bool ssidCallback(const char *ssid, esp_bd_addr_t address, int rssi) {
     for (auto &d : found) {
         if (d.name == ssid) { d.rssi = rssi; known = true; break; }
     }
-    if (!known) {
+    if (!known && found.size() < MAX_BT_DEVICES) {
         found.push_back({String(ssid), rssi});
         listDirty = true;
     }

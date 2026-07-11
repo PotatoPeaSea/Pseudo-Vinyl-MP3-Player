@@ -7,12 +7,13 @@
 static TFT_eSPI tft = TFT_eSPI(DISPLAY_WIDTH, DISPLAY_HEIGHT);
 
 // LVGL display buffer — internal DMA-capable SRAM (WROOM-32 has no PSRAM).
-// 10 rows × 2 buffers = ~9.6KB. Kept small to leave heap for the Classic
-// BT / A2DP stack, which needs ~120KB to initialize.
-#define LV_BUF_SIZE (DISPLAY_WIDTH * 10)
+// SINGLE buffer, 10 rows = 4.8KB (double buffering cost another 4.8KB for
+// rendering speed we can spare; RAM we can't). LVGL renders into the buffer,
+// waits for the SPI flush, then continues — slower refresh, half the RAM.
+#define LV_BUF_ROWS 10
+#define LV_BUF_SIZE (DISPLAY_WIDTH * LV_BUF_ROWS)
 static lv_disp_draw_buf_t draw_buf;
 static lv_color_t *buf1 = nullptr;
-static lv_color_t *buf2 = nullptr;
 static lv_disp_drv_t disp_drv;
 
 // ── LVGL flush callback ─────────────────────────────────────
@@ -42,20 +43,26 @@ void Display::init() {
     // LVGL core init
     lv_init();
 
-    // Allocate draw buffers in internal DMA-capable RAM
-    buf1 = (lv_color_t *)heap_caps_malloc(LV_BUF_SIZE * sizeof(lv_color_t), MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
-    buf2 = (lv_color_t *)heap_caps_malloc(LV_BUF_SIZE * sizeof(lv_color_t), MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
-
+    // Allocate the single draw buffer in internal DMA-capable RAM.
+    // Display::init is the very first init at boot (~250KB free), so this
+    // cannot realistically fail — the old static fallback buffer burned
+    // 7.7KB of .bss permanently just in case, which we no longer pay.
+    size_t bufPixels = LV_BUF_SIZE;
+    buf1 = (lv_color_t *)heap_caps_malloc(bufPixels * sizeof(lv_color_t), MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
     if (!buf1) {
-        // Heap exhausted — fall back to a small static single buffer
-        static lv_color_t fb1[DISPLAY_WIDTH * 16];
-        buf1 = fb1;
-        if (buf2) { heap_caps_free(buf2); buf2 = nullptr; }
-        lv_disp_draw_buf_init(&draw_buf, buf1, nullptr, DISPLAY_WIDTH * 16);
-    } else {
-        // buf2 may be nullptr → single buffering, still fine
-        lv_disp_draw_buf_init(&draw_buf, buf1, buf2, LV_BUF_SIZE);
+        // Last resort: 4 rows (1.9KB)
+        bufPixels = DISPLAY_WIDTH * 4;
+        buf1 = (lv_color_t *)heap_caps_malloc(bufPixels * sizeof(lv_color_t), MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
     }
+    if (!buf1) {
+        // Cannot happen at boot start; if it does, the device is unusable —
+        // halt loudly rather than crash somewhere confusing later
+        for (;;) {
+            Serial.println("[Display] FATAL: no RAM for LVGL draw buffer");
+            delay(5000);
+        }
+    }
+    lv_disp_draw_buf_init(&draw_buf, buf1, nullptr, bufPixels);
 
     // Display driver
     lv_disp_drv_init(&disp_drv);

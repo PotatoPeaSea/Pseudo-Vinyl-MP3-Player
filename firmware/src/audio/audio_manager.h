@@ -25,8 +25,10 @@ namespace AudioMgr {
     /// Must be called frequently from the audio task to feed the decoder
     void loop();
 
-    /// Load a playlist and optionally start playback
-    void setPlaylist(const std::vector<SongInfo> &songs);
+    /// Point playback at the song library. NOT copied — the caller keeps
+    /// ownership and the vector must outlive playback (it's the single
+    /// app-lifetime library in main.cpp; avoids a full duplicate in RAM).
+    void setPlaylist(const std::vector<SongInfo> *songs);
 
     /// Playback controls
     void play(int index);       // Play song at index

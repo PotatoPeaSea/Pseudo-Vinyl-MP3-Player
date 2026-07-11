@@ -47,21 +47,27 @@ static size_t curFileSize = 0;
 
 static Preferences audioPrefs;
 
-static std::vector<SongInfo> playlist;
+// Not owned — points at the app-lifetime library in main.cpp (no RAM copy)
+static const std::vector<SongInfo> *playlist = nullptr;
 static int currentIdx = -1;
 static bool playing = false;
+static bool decoderOpen = false;   // helix buffers (~25KB) currently allocated
 static PlayMode playMode = PlayMode::NORMAL;
 static int volume = DEFAULT_VOLUME;
 
 static audio_tools::AudioInfo lastInfo(44100, 2, 16);
 
-// Shuffle order
-static std::vector<int> shuffleOrder;
+static size_t playlistSize() {
+    return playlist ? playlist->size() : 0;
+}
+
+// Shuffle order (uint8_t — MAX_SONGS is well under 256)
+static std::vector<uint8_t> shuffleOrder;
 static int shufflePos = 0;
 
 static void buildShuffleOrder() {
-    shuffleOrder.resize(playlist.size());
-    for (size_t i = 0; i < playlist.size(); i++) shuffleOrder[i] = i;
+    shuffleOrder.resize(playlistSize());
+    for (size_t i = 0; i < shuffleOrder.size(); i++) shuffleOrder[i] = i;
     // Fisher-Yates shuffle
     for (int i = shuffleOrder.size() - 1; i > 0; i--) {
         int j = random(0, i + 1);
@@ -71,7 +77,7 @@ static void buildShuffleOrder() {
 }
 
 static int getNextIndex() {
-    if (playlist.empty()) return -1;
+    if (playlistSize() == 0) return -1;
 
     switch (playMode) {
         case PlayMode::REPEAT_ONE:
@@ -83,10 +89,10 @@ static int getNextIndex() {
             }
             return shuffleOrder[shufflePos];
         case PlayMode::REPEAT_ALL:
-            return (currentIdx + 1) % playlist.size();
+            return (currentIdx + 1) % playlistSize();
         case PlayMode::NORMAL:
         default:
-            if (currentIdx + 1 < (int)playlist.size()) {
+            if (currentIdx + 1 < (int)playlistSize()) {
                 return currentIdx + 1;
             }
             return -1;  // End of playlist
@@ -94,8 +100,8 @@ static int getNextIndex() {
 }
 
 static int getPrevIndex() {
-    if (playlist.empty()) return -1;
-    if (currentIdx <= 0) return playlist.size() - 1;
+    if (playlistSize() == 0) return -1;
+    if (currentIdx <= 0) return playlistSize() - 1;
     return currentIdx - 1;
 }
 
@@ -116,6 +122,17 @@ static void applyOutputRouting() {
 static void closePipeline() {
     playing = false;
     if (curFile) curFile.close();
+}
+
+// Free the helix decoder buffers (~25KB, split across several allocations)
+// when playback fully stops. play() re-allocates via decoder.begin() —
+// slower to start again, but the RAM is available while idle.
+static void releaseDecoder() {
+    if (!decoderOpen) return;
+    decoder.end();
+    decoderOpen = false;
+    Serial.printf("[Audio] Decoder released (free=%u largest=%u)\n",
+                  ESP.getFreeHeap(), ESP.getMaxAllocHeap());
 }
 
 // ── Public API ──────────────────────────────────────────────
@@ -160,28 +177,29 @@ void AudioMgr::loop() {
             play(nextIdx);
         } else {
             closePipeline();
+            releaseDecoder();
             currentIdx = -1;
             Serial.println("[Audio] Playlist finished");
         }
     }
 }
 
-void AudioMgr::setPlaylist(const std::vector<SongInfo> &songs) {
+void AudioMgr::setPlaylist(const std::vector<SongInfo> *songs) {
     playlist = songs;
     currentIdx = -1;
     playing = false;
     if (playMode == PlayMode::SHUFFLE) {
         buildShuffleOrder();
     }
-    Serial.printf("[Audio] Playlist loaded (%d songs)\n", playlist.size());
+    Serial.printf("[Audio] Playlist loaded (%d songs)\n", (int)playlistSize());
 }
 
 void AudioMgr::play(int index) {
-    if (index < 0 || index >= (int)playlist.size()) return;
+    if (index < 0 || index >= (int)playlistSize()) return;
 
     closePipeline();
     currentIdx = index;
-    const SongInfo &song = playlist[currentIdx];
+    const SongInfo &song = (*playlist)[currentIdx];
 
     curFile = SD.open(song.filepath.c_str(), FILE_READ);
     if (!curFile) {
@@ -192,9 +210,11 @@ void AudioMgr::play(int index) {
     meter.bytes = 0;
 
     decoder.begin();
+    decoderOpen = true;
     copier.begin(decoder, curFile);
     playing = true;
-    Serial.printf("[Audio] Playing [%d]: %s\n", currentIdx, song.title.c_str());
+    Serial.printf("[Audio] Playing [%d]: %s\n", currentIdx,
+                  Storage::songTitle(song).c_str());
 }
 
 void AudioMgr::pause() {
@@ -211,6 +231,7 @@ void AudioMgr::resume() {
 
 void AudioMgr::stop() {
     closePipeline();
+    releaseDecoder();
     Serial.println("[Audio] Stopped");
 }
 
@@ -263,8 +284,8 @@ int AudioMgr::currentIndex() {
 }
 
 const SongInfo* AudioMgr::currentSong() {
-    if (currentIdx >= 0 && currentIdx < (int)playlist.size()) {
-        return &playlist[currentIdx];
+    if (currentIdx >= 0 && currentIdx < (int)playlistSize()) {
+        return &(*playlist)[currentIdx];
     }
     return nullptr;
 }

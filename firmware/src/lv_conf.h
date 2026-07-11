@@ -1,6 +1,6 @@
 /**
  * LVGL Configuration for Pseudo Vinyl MP3 Player
- * ESP32-S3 + GC9A01 (240×240)
+ * ESP32-WROOM-32 + GC9A01 (240×240) — trimmed hard for RAM
  */
 
 #ifndef LV_CONF_H
@@ -31,7 +31,9 @@
 /* Drawing */
 #define LV_DRAW_COMPLEX          1
 #define LV_SHADOW_CACHE_SIZE     0
-#define LV_CIRCLE_CACHE_SIZE     4
+/* 2 entries cover the two big circles (vinyl ring + art holder); smaller
+ * ones re-rasterize each frame — slower, but less heap held */
+#define LV_CIRCLE_CACHE_SIZE     2
 
 /* GPU - none */
 #define LV_USE_GPU_STM32_DMA2D   0
@@ -47,30 +49,30 @@
 #define LV_USE_ASSERT_OBJ        0
 #define LV_USE_ASSERT_STYLE      0
 
-/* Fonts */
+/* Fonts — only the sizes actually used (12 subtitle, 14 default, 16 title) */
 #define LV_FONT_MONTSERRAT_12   1
 #define LV_FONT_MONTSERRAT_14   1
 #define LV_FONT_MONTSERRAT_16   1
-#define LV_FONT_MONTSERRAT_20   1
+#define LV_FONT_MONTSERRAT_20   0
 #define LV_FONT_DEFAULT          &lv_font_montserrat_14
 
 /* Symbols (used in UI) */
 #define LV_USE_FONT_PLACEHOLDER  1
 
-/* Widgets */
+/* Widgets — only what the UI instantiates: arc, btn, img, label (+list) */
 #define LV_USE_ARC               1
-#define LV_USE_BAR               1
+#define LV_USE_BAR               0
 #define LV_USE_BTN               1
-#define LV_USE_BTNMATRIX         1
+#define LV_USE_BTNMATRIX         0
 #define LV_USE_CANVAS            0
 #define LV_USE_CHECKBOX          0
 #define LV_USE_DROPDOWN          0
 #define LV_USE_IMG               1
 #define LV_USE_LABEL             1
-#define LV_USE_LINE              1
+#define LV_USE_LINE              0
 #define LV_USE_ROLLER            0
-#define LV_USE_SLIDER            1
-#define LV_USE_SWITCH            1
+#define LV_USE_SLIDER            0
+#define LV_USE_SWITCH            0
 #define LV_USE_TEXTAREA          0
 #define LV_USE_TABLE             0
 
@@ -85,18 +87,18 @@
 #define LV_USE_LIST              1
 #define LV_USE_MENU              0
 #define LV_USE_METER             0
-#define LV_USE_MSGBOX            1
+#define LV_USE_MSGBOX            0
 #define LV_USE_SPAN              0
 #define LV_USE_SPINBOX           0
-#define LV_USE_SPINNER           1
+#define LV_USE_SPINNER           0
 #define LV_USE_TABVIEW           0
 #define LV_USE_TILEVIEW          0
 #define LV_USE_WIN               0
 
-/* Themes */
-#define LV_USE_THEME_DEFAULT     1
-#define LV_THEME_DEFAULT_DARK    1
-#define LV_USE_THEME_BASIC       0
+/* Themes — basic instead of default: the default theme heap-allocates
+ * dozens of styles at init; every widget here is custom-styled anyway */
+#define LV_USE_THEME_DEFAULT     0
+#define LV_USE_THEME_BASIC       1
 
 /* Animations */
 #define LV_USE_ANIM              1

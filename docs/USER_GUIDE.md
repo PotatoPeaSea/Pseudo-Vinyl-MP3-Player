@@ -30,7 +30,7 @@ Everything you need to load music, pair your earbuds, and use the player day-to-
 3. **Copy your music** (the `.mp3` *and* `.art` files together) onto the card. Any folder layout works — the player scans all folders.
 4. Insert the card **before powering on**.
 
-> **Upgrading from an older version?** Art files made before July 2026 were 240×240 and are ignored by the current firmware. Re-run the tool with `--force` to regenerate them at the new 120×120 size.
+> **Upgrading from an older version?** Art files made before July 2026 were 240×240 (and briefly 120×120) and are ignored by the current firmware. Re-run the tool with `--force` to regenerate them at the current 90×90 size.
 
 ---
 
@@ -73,7 +73,7 @@ Library  →  Settings  →  Bluetooth  →  Now Playing  →  (back to Library)
 A scrollable list of every MP3 found on the card, sorted alphabetically. Songs with album art show a picture icon. Rotate the encoder to browse, press **Play** to start a song — you'll jump to Now Playing.
 
 ### 💿 Now Playing
-The signature screen: your album art spins like a record at the center, with a gold progress ring around the display edge. Song title and artist scroll below. Top corners show the play mode (left) and volume (right); a small Bluetooth icon appears top-center when connected.
+The signature screen: your album art spins like a record at the center, with a gold progress ring around the display edge. The song title scrolls below. Top corners show the play mode (left) and volume (right); a small Bluetooth icon appears top-center when connected.
 
 ### ⚙ Settings
 - **Output: Bluetooth / Wired (3.5mm)** — select to toggle where audio goes. Takes effect immediately (the current song restarts on the new output) and is remembered across power-offs.

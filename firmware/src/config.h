@@ -1,15 +1,18 @@
 #pragma once
 /**
  * Pseudo Vinyl MP3 Player — Hardware Configuration
- * Board: ESP32-WROOM-32 (classic ESP32, 4MB flash, no PSRAM)
+ * Board: ESP32-WROVER N4R8 (classic ESP32, 4MB flash, 8MB PSRAM)
  *
- * Pin rules for this chip:
+ * Pin rules for this module:
  *  - GPIO 6-11 are flash — never use
- *  - GPIO 0 is a strapping pin — avoid
+ *  - GPIO 16/17 are the PSRAM CS/CLK lines on WROVER — never use.
+ *    (This is why the display SCLK and SD MOSI moved off them.)
  *  - GPIO 12 (MTDI) strapping: a pull-up at boot bricks flash voltage —
  *    left unused because many SD modules have pull-ups on all lines
  *  - GPIO 34/35/36/39 are INPUT-ONLY, no internal pull-ups
  *  - ADC2 pins can't do analogRead while Bluetooth is on → battery on ADC1
+ *  - Strapping pins in use: 0 (TFT MOSI), 2 (TFT CS), 5 (TFT SCLK),
+ *    15 (TFT RST) — see the display block for the boot-time caveat
  */
 
 // ── Feature Flags ───────────────────────────────────────────
@@ -23,29 +26,38 @@
 #define DEBUG_MODE          0
 #endif
 
-// ── Display: GC9A01 (240×240 round IPS, VSPI) ───────────────
+// ── Display: GC9A01 (240×240 round IPS) ─────────────────────
 // NOTE: pins are duplicated in platformio.ini TFT_eSPI build flags —
 // keep both in sync!
+//
+// CAUTION — GPIO 0 (SDA/MOSI) is the boot-mode strapping pin. It must read
+// HIGH at reset or the chip drops into serial download instead of running
+// the app. It is safe as an SPI output once booted, but if the panel's SDA
+// line has a pull-down (or the module drives it low at reset) the board
+// will not boot. If boots become unreliable, this pin is the first suspect:
+// add a 10k pull-up to 3V3 on GPIO 0, or move SDA to GPIO 25/26.
 #define DISPLAY_WIDTH       240
 #define DISPLAY_HEIGHT      240
-#define PIN_TFT_MOSI        4       // SDA
-#define PIN_TFT_SCLK        16      // SCL
+#define PIN_TFT_MOSI        0       // SDA — strapping pin, see caution above
+#define PIN_TFT_SCLK        5       // SCL
 #define PIN_TFT_CS          2
-#define PIN_TFT_DC          21
+#define PIN_TFT_DC          23
 #define PIN_TFT_RST         15
 // Display module has no backlight pin (BL hardwired on-board); brightness
 // control is unavailable.
 
 // ── SD Card (HSPI) ──────────────────────────────────────────
-#define PIN_SD_SCLK         18
-#define PIN_SD_MOSI         17
-#define PIN_SD_MISO         19
-#define PIN_SD_CS           5
+#define PIN_SD_SCLK         21
+#define PIN_SD_MOSI         18
+#define PIN_SD_MISO         22
+#define PIN_SD_CS           19
 
 // ── Audio: Bluetooth A2DP only ──────────────────────────────
-// Wired I2S/PCM5102 output was removed: on the no-PSRAM WROOM-32 the
-// Classic-BT + A2DP stack (~108KB) plus SD/FATFS + LVGL UI leaves no room
-// for a second output path. Output is Bluetooth-only.
+// Wired I2S/PCM5102 output was removed back on the no-PSRAM WROOM-32: the
+// Classic-BT + A2DP stack (~108KB) plus SD/FATFS + LVGL UI left no room for
+// a second output path. Output is Bluetooth-only. The WROVER's PSRAM would
+// now make a second path affordable, but re-adding it is out of scope here
+// and the pins were reclaimed for the rewired display/SD.
 
 // ── Rotary Encoder (KY-040) ─────────────────────────────────
 #define PIN_ENC_A           32
@@ -53,9 +65,10 @@
 #define PIN_ENC_SW          27
 
 // ── Buttons ─────────────────────────────────────────────────
-#define PIN_BTN_PLAY        13      // moved off 16 (now TFT SCLK)
-#define PIN_BTN_NEXT        14      // moved off 17 (now SD MOSI)
-#define PIN_BTN_PREV        23      // moved off 21 (now TFT DC)
+#define PIN_BTN_PLAY        13
+#define PIN_BTN_NEXT        14
+#define PIN_BTN_PREV        4       // moved off 23 (now TFT DC); 4 was freed
+                                    // when TFT MOSI moved to GPIO 0
 
 // ── Battery voltage divider (ADC1_CH6 — usable with BT on) ──
 #define PIN_BATT_ADC        34
@@ -83,10 +96,13 @@
 #define MAX_SONGS           15
 
 // ── Album Art ───────────────────────────────────────────────
-// No PSRAM: 240×240 RGB565 (113KB) doesn't fit next to the BT stack.
-// Art files are ≤90×90 RGB565 (16.2KB) — the vinyl label is 90px, so
-// anything larger was downscaled at display time anyway and just wasted
-// heap. Re-run tools/prescale_art with size 90 for old 120px .art files.
+// 90×90 RGB565 (16.2KB) — the vinyl label is 90px, so anything larger was
+// downscaled at display time anyway. Sized this way for the no-PSRAM
+// WROOM-32, where 240×240 (113KB) could not fit next to the BT stack.
+// On the WROVER that ceiling is gone and this could go back up, but the
+// display benefit is nil until the label itself is drawn larger — left
+// alone until the board is verified on hardware.
+// Re-run tools/prescale_art with size 90 for old 120px .art files.
 #define ART_MAX_SIDE        90
 #define ART_MAX_BYTES       (ART_MAX_SIDE * ART_MAX_SIDE * 2)
 

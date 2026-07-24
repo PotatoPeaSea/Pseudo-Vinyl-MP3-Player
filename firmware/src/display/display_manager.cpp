@@ -6,10 +6,16 @@
 // ── Static objects ──────────────────────────────────────────
 static TFT_eSPI tft = TFT_eSPI(DISPLAY_WIDTH, DISPLAY_HEIGHT);
 
-// LVGL display buffer — internal DMA-capable SRAM (WROOM-32 has no PSRAM).
+// LVGL display buffer — internal DMA-capable SRAM. This MUST stay internal
+// even though the WROVER has PSRAM: the ESP32's SPI DMA engine cannot read
+// from external RAM, so a PSRAM draw buffer would flush garbage. The
+// MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL request below is load-bearing, not
+// leftover WROOM-era caution.
 // SINGLE buffer, 10 rows = 4.8KB (double buffering cost another 4.8KB for
 // rendering speed we can spare; RAM we can't). LVGL renders into the buffer,
 // waits for the SPI flush, then continues — slower refresh, half the RAM.
+// With PSRAM freeing up internal SRAM, going back to double buffering is a
+// cheap win once the board is verified.
 #define LV_BUF_ROWS 10
 #define LV_BUF_SIZE (DISPLAY_WIDTH * LV_BUF_ROWS)
 static lv_disp_draw_buf_t draw_buf;

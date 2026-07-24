@@ -100,7 +100,8 @@ uint8_t* Storage::loadArtFile(const String &mp3Path, size_t &outSize) {
     }
 
     outSize = f.size();
-    // No PSRAM on WROOM-32 — refuse art that won't fit next to the BT stack
+    // Refuse art larger than the display can use (see ART_MAX_SIDE) — the
+    // cap dates from the no-PSRAM WROOM-32 but still bounds the buffer
     if (outSize == 0 || outSize > ART_MAX_BYTES) {
         Serial.printf("[SD] Art too large (%u bytes, max %u): %s\n",
                       (unsigned)outSize, (unsigned)ART_MAX_BYTES, artPath.c_str());

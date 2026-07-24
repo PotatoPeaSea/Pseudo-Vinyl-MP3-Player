@@ -1,6 +1,6 @@
 /**
  * Pseudo Vinyl MP3 Player — Firmware
- * Board: ESP32-WROOM-32 (classic ESP32, BT Classic A2DP source)
+ * Board: ESP32-WROVER N4R8 (classic ESP32 + 8MB PSRAM, BT Classic A2DP source)
  *
  * Entry point: initializes all peripherals and spawns FreeRTOS tasks.
  *
@@ -21,6 +21,7 @@
  */
 
 #include <Arduino.h>
+#include <esp_heap_caps.h>  // heap_caps_get_largest_free_block (PSRAM report)
 #include <lvgl.h>   // LV_KEY_* codes for UI::sendKey
 #include "config.h"
 #include "display/display_manager.h"
@@ -233,11 +234,25 @@ void setup() {
     delay(500);
     Serial.println("\n═══════════════════════════════════");
     Serial.println("  Pseudo Vinyl MP3 Player v2.0");
-    Serial.println("  ESP32-WROOM-32 + A2DP");
+    Serial.println("  ESP32-WROVER N4R8 + A2DP");
     Serial.println("═══════════════════════════════════\n");
 
     Serial.printf("[Heap] boot start: free=%u largest=%u\n",
                   ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+
+    // PSRAM is the whole reason this board was chosen — if it did not
+    // initialize, every heap figure below reverts to the old razor-thin
+    // WROOM budget and the failures in docs/MEMORY.md come straight back.
+    // Fail loudly rather than limping.
+    if (psramFound()) {
+        Serial.printf("[PSRAM] ok: size=%u free=%u largest=%u\n",
+                      ESP.getPsramSize(), ESP.getFreePsram(),
+                      heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM));
+    } else {
+        Serial.println("[PSRAM] *** NOT FOUND *** — running on internal SRAM "
+                       "only. Check BOARD_HAS_PSRAM and that this module is "
+                       "really a WROVER.");
+    }
 
     // 1. Display
     Display::init();

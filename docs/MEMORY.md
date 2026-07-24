@@ -5,6 +5,15 @@ the LVGL UI to coexist on the WROOM-32. Everything here comes from hardware
 bring-up on the `feature/bt-only-lowmem` branch (July 2026), plus the
 RAM-minimization pass on `feature/ram-squeeze` (see the section at the end).
 
+> [!IMPORTANT]
+> **Superseded in part — the board moved to an ESP32-WROVER N4R8 (8MB PSRAM)
+> on `feature/wrover-n4r8`, 2026-07-23.** Everything below describes the
+> WROOM-32 and its ~250–290KB total budget. The failure *mechanisms* (heap
+> fragmentation, Bluedroid's lazy allocation, LVGL 8 not checking its own
+> allocations, allocation ordering) all still apply — PSRAM raises the
+> ceiling, it does not change the physics. The specific numbers do not.
+> See "Board change: WROOM-32 → WROVER N4R8" at the end.
+
 ## The core problem
 
 The ESP32-WROOM-32 has **520KB of SRAM, no PSRAM**. After the ROM, Wi-Fi/BT
@@ -358,3 +367,105 @@ core-function memory at boot, when the heap is deterministic.
   logs, not the build-time number.
 - Boot now builds ONE screen instead of four, so the heap is also healthier
   at the moment Bluedroid initializes.
+
+---
+
+## Board change: WROOM-32 → WROVER N4R8 (`feature/wrover-n4r8`, 2026-07-23)
+
+The module changed to an **ESP32-WROVER N4R8**: same classic ESP32 die (so
+Bluetooth Classic / A2DP still works — the reason the S3 was rejected), 4MB
+flash, plus **8MB PSRAM**. Not yet verified on hardware.
+
+### Why the pins moved
+
+On a WROVER, **GPIO 16 and 17 are the PSRAM CS/CLK lines** and are no longer
+free. The old map had display SCLK on 16 and SD MOSI on 17, so the whole
+display/SD wiring was reassigned:
+
+| Signal | Old | New |
+|---|---|---|
+| TFT MOSI (SDA) | 4 | **0** |
+| TFT SCLK (SCL) | 16 | **5** |
+| TFT CS | 2 | 2 |
+| TFT DC | 21 | **23** |
+| TFT RST | 15 | 15 |
+| SD SCLK | 18 | **21** |
+| SD MOSI | 17 | **18** |
+| SD MISO | 19 | **22** |
+| SD CS | 5 | **19** |
+| Btn PREV | 23 | **4** |
+
+Encoder (32/33/27), PLAY (13), NEXT (14) and battery ADC (34) are unchanged.
+PREV moved because 23 became TFT DC; it took GPIO 4, freed when TFT MOSI left.
+
+**GPIO 0 is a boot-mode strapping pin** and is now TFT MOSI. It must read
+HIGH at reset or the chip enters serial download instead of running the app.
+Fine as an SPI output once booted, but if boots are unreliable this is the
+first suspect — pull GPIO 0 up to 3V3 with 10k, or move SDA to 25/26.
+
+Both SPI buses are now fully GPIO-matrix routed (no IOMUX-native pins). If
+the panel tears or shows garbage, drop `SPI_FREQUENCY` from 40MHz to 27MHz
+before suspecting anything else.
+
+### PSRAM
+
+`board` stays `esp32dev` — it is the generic classic-ESP32 definition and is
+what a third-party WROVER module wants. `esp-wrover-kit` was deliberately
+**not** used: it contributes no PSRAM flags of its own and hard-codes
+FTDI/460800 upload for Espressif's official kit. PSRAM is enabled explicitly:
+
+```
+-DBOARD_HAS_PSRAM            ; makes initArduino() call psramInit()
+-mfix-esp32-psram-cache-issue ; matches the prebuilt framework
+```
+
+The prebuilt Arduino framework ships `CONFIG_SPIRAM_USE_MALLOC=y` with
+`CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=4096` and
+`CONFIG_SPIRAM_CACHE_WORKAROUND=y`. Consequences:
+
+- **Ordinary `malloc`/`new` over 4KB lands in PSRAM automatically**, so the
+  LVGL widget trees, art buffer, song vector and decoder stop competing for
+  internal SRAM. Nothing had to be rewritten to get this.
+- Allocations that *must* be internal already request it by capability, so
+  they are unaffected: Bluedroid (internal by default), and the LVGL draw
+  buffer (`MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL`).
+- **The LVGL draw buffer must stay internal.** ESP32 SPI DMA cannot read
+  from external RAM; a PSRAM draw buffer would flush garbage to the panel.
+  That capability request in `display_manager.cpp` is load-bearing.
+- Only ~4MB of the 8MB is directly mappable; the rest needs the himem
+  bank-switch API and is not used.
+- `-mfix-esp32-psram-cache-issue` is only strictly needed on ESP32 silicon
+  rev <3. It can be dropped for a small speed win *if* this module is
+  confirmed rev 3+.
+
+`setup()` now logs `[PSRAM] ok: size=… free=… largest=…`, or shouts
+`[PSRAM] *** NOT FOUND ***`. If that warning appears, every heap number
+reverts to the WROOM budget and the failures documented above come straight
+back — treat it as a hard failure, not a warning.
+
+### What was deliberately NOT changed
+
+The ram-squeeze limits (`MAX_SONGS` 15, `ART_MAX_SIDE` 90, 10KB ring buffer,
+single LVGL draw buffer, deferred SD mount, lazy screen lifecycle) are all
+**kept as-is** for this pass. Rationale: the pin change needs to be verified
+on hardware in isolation, and several of those values were tuned against
+observed hardware failures rather than theory. Relaxing them is the obvious
+follow-up once the board boots — likely candidates, cheapest first:
+
+1. Double LVGL draw buffer again (+4.8KB internal, faster rendering).
+2. `MAX_SONGS` and the song-list `HEAP_FLOOR` guard.
+3. `ART_MAX_SIDE` — only worth it alongside drawing the vinyl label larger.
+4. Reconsider the deferred SD mount: it exists because the A2DP handshake
+   needed a ~50KB contiguous block that FATFS fragmentation destroyed. With
+   PSRAM absorbing the large allocations this may no longer be necessary,
+   but Bluedroid allocates from *internal* RAM, so verify before removing.
+
+Note that the A2DP stutter investigated at the end of the previous section
+was diagnosed as **L2CAP congestion, not memory** — PSRAM should not be
+expected to fix it.
+
+### Build size
+
+`pio run -e esp32dev`: static RAM **54,100 bytes (16.5%)**, flash 1,650,857.
+Up ~2.1KB static from the WROOM build (51,996) — the PSRAM HAL and cache
+workaround. Both `esp32dev` and `esp32dev-debug` compile clean.

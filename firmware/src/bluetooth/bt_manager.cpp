@@ -110,8 +110,10 @@ static void connectionStateChanged(esp_a2d_connection_state_t state, void *) {
             // sequences intermittently left btc_a2dp_source "started"
             // with a dead data path (3 of 4 kicked boots on hardware).
             // The heap-safety reason for the kick is gone anyway: the SD
-            // mount gates on isStreaming(), so the heartbeat-driven start
-            // always runs against the clean pre-FATFS heap.
+            // mount now runs once in setup(), well before any connection —
+            // by the time a connect happens FATFS has already settled, so
+            // the heartbeat-driven start races nothing (no concurrent mount
+            // to starve it, unlike the old connect-gated mount).
             break;
         case ESP_A2D_CONNECTION_STATE_CONNECTING:
             Serial.println("[BT] Connecting...");

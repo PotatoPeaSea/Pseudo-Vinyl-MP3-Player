@@ -521,9 +521,138 @@ larger, with 4MB of PSRAM still untouched behind it.
   with nothing to find. A2DP streaming, the L2CAP congestion stutter, and
   the stall watchdog are all completely untested on this board.
 
+### Spinning album art never actually rotated (LVGL 8 transform semantics)
+
+**Symptom:** `UI::update()` had spin logic since early on (`vinyl_angle` +=
+`VINYL_SPIN_SPEED_DEG` each frame) and the code compiled and ran, but the art
+would never visibly rotate on the panel — it would look like a static Now
+Playing screen.
+
+**Cause:** The rotation was applied via `lv_obj_set_style_transform_angle()`
+to `np_art_holder`, which is a plain `lv_obj_create()` container (used only
+to clip the art into a circle via `clip_corner`) — **not** an `lv_img`.
+LVGL 8's rectangle draw path (`lv_draw_rect.c`) never reads
+`transform_angle`/`transform_zoom` at all; those style props are only
+honored by `lv_draw_img.c`. Separately, and independent of that: LVGL does
+not propagate a parent's transform to its children's rendering regardless of
+widget type — each child draws in its own laid-out box. So even if the
+container type were rotatable, the child `np_art_img` (the actual art) would
+still have sat still.
+
+**Fix:** Rotate `np_art_img` itself (an `lv_img`) via `lv_img_set_angle()`
+(0.1° units), not the holder. Pivot doesn't need manual bookkeeping —
+`lv_img_set_src()` resets `img->pivot` to `header.w/2, header.h/2` (the
+source image's own center, pre-zoom) every time art loads, and
+`_lv_img_buf_get_transformed_area` applies pivot before zoom scaling, so
+rotation stays centered regardless of the source `.art` file's side length.
+
+**Lesson:** in LVGL 8, `transform_angle`/`transform_zoom` only ever rotate an
+object's own `lv_img` content — never a rectangle background, and never a
+subtree. Any "rotate this whole visual assembly" idea needs the rotated
+part to *be* the image widget, not a container wrapping it.
+
 Testing SD required temporarily removing the `isStreaming()` gate in
 `maybeMountStorage()`, since the deferred mount otherwise never runs without
 a speaker. That patch was reverted; the device was reflashed with the
 committed firmware. Worth noting the gate now costs more than it buys —
 the mount ran at largest=86004 with no ill effect, which is the follow-up
 item about reconsidering the deferred mount.
+
+### `ART_MAX_SIDE` raised 90 → 240 (item 3 from the relax list, above)
+
+A user hit the exact upgrade trap the docs warned about: pre-existing
+`.art` files (120×120 or 240×240, from before the ram-squeeze pass) were
+silently rejected by `Storage::loadArtFile`'s size check, showing the plain
+gold label instead of art. Rather than force everyone to regenerate art,
+`ART_MAX_SIDE` went to **240** — the display's native resolution and the
+largest size the pre-scaler tool can ever produce, so no `.art` file is
+rejected on size grounds again. The vinyl label still renders at 90px;
+larger sources are just downscaled at display time via `lv_img_set_zoom`
+(already parameterized by source side length, so this needed no change).
+
+**Found while making the change — the art heap-guard was checking the wrong
+heap region for a PSRAM board.** `loadArtFile`'s guard compared
+`ESP.getMaxAllocHeap()` (internal SRAM only — this is the same figure
+logged throughout this doc as "largest", confirmed by the bring-up numbers:
+internal largest sits ~80-90KB after BT+SD, nowhere near the ~4MB PSRAM
+total) against the art buffer size. That guard predates PSRAM, when
+internal SRAM was the only heap and genuinely where the allocation would
+land. On the WROVER, `malloc()` for anything over the 4KB
+`CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL` threshold lands in PSRAM automatically
+(see the WROOM→WROVER section above) — every art buffer here clears that
+threshold (min is 90×90×2=16.2KB). Left unchanged, raising `ART_MAX_SIDE`
+to 240 (112.5KB) would have made the guard reject art on *every* load, since
+internal-heap headroom was never enough to hold it even though PSRAM had
+room to spare — the cap bump would have fixed nothing.
+
+**Fix:** the guard now checks `heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM)`
+instead — the same PSRAM-specific call already used for the boot-time
+`[PSRAM]` log in `main.cpp`.
+
+**Lesson:** `ESP.getMaxAllocHeap()`/`ESP.getFreeHeap()` report **internal
+SRAM only**, even with PSRAM enabled and merged into the default malloc
+capability set. Any guard sized against a PSRAM-destined allocation must
+query `MALLOC_CAP_SPIRAM` explicitly — checking the internal figure just
+because "that's the heap function we've always used" silently reintroduces
+the exact ceiling PSRAM was added to remove.
+
+### SD mount moved from connect-gated to unconditional-at-boot (2026-07-23)
+
+Follow-up item #4 from the "deliberately NOT changed" relax list, above —
+verified now instead of just proposed. The library must be browsable at
+boot, not only after a speaker connects (product requirement), so
+`maybeMountStorage()`'s `BtMgr::isStreaming()` gate in `main.cpp` was
+removed: SD now mounts and scans once in `setup()`, right after
+`BtMgr::init()`/`AudioMgr::init()` (unchanged position — Bluedroid still
+gets first claim on the heap), unconditionally, before any speaker has
+connected.
+
+**Why this is safer than it sounds, not just more convenient:** the old
+design's danger was FATFS *racing* a live A2DP connect event — mounting
+after a connect could contend with Bluedroid's post-connect allocations for
+the same heap. Moving the mount to a fixed point in `setup()`, before any
+connection can possibly happen, removes the race entirely rather than just
+relocating it: by the time a speaker connects later, FATFS has already
+settled into its steady state and stays there.
+
+**Verified on hardware (2026-07-23, same COM10 board, no speaker in
+range):**
+
+| Checkpoint | free | largest |
+|---|---|---|
+| After BT/audio init | 81632 | 69620 |
+| After SD mount + scan (15 songs, 2 playlists) | 67748 | 59380 |
+| After all 3 tasks launched | 49212 | — |
+
+`largest=59380` after the full boot sequence (SD mounted, 15-song list
+built, all tasks running) is comfortably clear of the ~50KB the A2DP
+handshake needs later when a speaker actually connects — and discovery/
+connect logic ran cleanly afterward (target device just wasn't powered on
+during this test, so the actual pairing handshake itself is still
+unverified — that needs a real connect attempt).
+
+### Playlists = top-level SD folders (2026-07-23)
+
+New feature, not a bug fix: `Storage::scanPlaylists()` (`sd_manager.cpp`)
+lists top-level directories under the SD root as `PlaylistInfo{name, path}`,
+capped at `MAX_PLAYLISTS` (8, `config.h`) with a synthesized "All Songs"
+(root) entry always first — cheap, since it only reads directory names, not
+song contents. Selecting one on the new Playlists screen re-runs the
+existing (already recursive) `Storage::scanMusic()` scoped to that folder's
+path, reusing the single shared `songs` vector in `main.cpp` (same
+RAM-conscious "one app-lifetime vector, everything else holds a pointer"
+pattern as the rest of this project) — no new per-song RAM cost, no
+duplicate storage.
+
+`AudioMgr::stop()` is called before the rescan+swap (`maybeSwitchPlaylist()`
+in `main.cpp`): `AudioMgr::setPlaylist()` alone resets `currentIdx` but
+doesn't close the open file, and since `songs` is reassigned in place (same
+vector object, new contents), a still-playing index from the old playlist
+would otherwise dereference an unrelated song in the new one.
+
+Verified on hardware: card has 2 playlists (root "All Songs" + 1 folder),
+found and scanned correctly at boot. Playlist *switching* (selecting a
+folder on-device, confirming the correct subset of songs loads and the
+previous selection's playback stops cleanly) was not exercised in this
+session — no physical button/encoder input or debug-console interaction was
+driven during the flash-and-watch check, only the boot sequence.

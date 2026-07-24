@@ -39,6 +39,7 @@ static TaskHandle_t inputTaskHandle = nullptr;
 
 // ── Song library (shared state) ─────────────────────────────
 static std::vector<SongInfo> songs;
+static std::vector<PlaylistInfo> playlists;   // "All Songs" + one per top-level SD folder
 
 // ═══════════════════════════════════════════════════════════
 // AUDIO TASK (Core 1) — MP3 decode + output feed
@@ -52,30 +53,55 @@ void audioTask(void *param) {
     }
 }
 
-// Deferred SD mount. FATFS fragments the heap down to a ~20KB largest block,
-// which starves the A2DP connection handshake (~50KB contiguous, transient)
-// AND the media-start path (~28KB after the connect event — racing it killed
-// the data callback silently: hardware showed one pull then a dead stream).
-// So we wait for isStreaming(), not just isConnected(): by then Bluedroid is
-// fully allocated. Runs on the UI task so all LVGL access stays
-// single-threaded.
-static void maybeMountStorage() {
-    static bool storageReady = false;
-    if (storageReady || !BtMgr::isStreaming()) return;
-    storageReady = true;
-
-    Serial.printf("[Storage] BT up — mounting SD (free=%u largest=%u)\n",
+// SD mount + song scan now run once during setup(), right after BT/audio
+// init — see the boot-order comment there. This used to be deferred until
+// a speaker connected (BtMgr::isStreaming()), because on the no-PSRAM
+// WROOM-32 mounting FATFS fragmented the heap down to a ~20KB largest block,
+// which starved the A2DP connection handshake (~50KB contiguous, transient).
+// On the WROVER, hardware bring-up (docs/MEMORY.md) measured largest=81908
+// AFTER BT init + SD mount + a full 15-song list — comfortably above that
+// 50KB need, with no connect-time race left to lose since the mount now
+// happens once, well before any speaker connects. Not yet re-verified on
+// hardware with THIS ordering (mount always runs, not gated on a connect
+// event) — watch the same free=/largest= log lines after flashing.
+static void mountStorageAtBoot() {
+    Serial.printf("[Storage] Mounting SD (free=%u largest=%u)\n",
                   ESP.getFreeHeap(), ESP.getMaxAllocHeap());
     if (Storage::init()) {
+        playlists = Storage::scanPlaylists("/");
         songs = Storage::scanMusic("/");
-        // Both take a pointer to the single app-lifetime vector — no copies
+        // All take a pointer to the single app-lifetime vectors — no copies
         AudioMgr::setPlaylist(&songs);
+        UI::setPlaylists(&playlists);
         UI::setSongList(&songs);
-        Serial.printf("[Storage] %d songs loaded (free=%u largest=%u)\n",
-                      songs.size(), ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+        Serial.printf("[Storage] %d songs, %d playlist(s) loaded (free=%u largest=%u)\n",
+                      songs.size(), playlists.size(), ESP.getFreeHeap(), ESP.getMaxAllocHeap());
     } else {
         Serial.println("[Storage] SD mount FAILED");
     }
+}
+
+// Applies a playlist switch requested from the Playlists screen. Rescanning
+// SD + repointing AudioMgr/UI at a new song set is too heavy for an LVGL
+// event callback, so this runs from the UI task (see UI::pollPlaylistSelect).
+static void maybeSwitchPlaylist() {
+    int idx = UI::pollPlaylistSelect();
+    if (idx < 0 || idx >= (int)playlists.size()) return;
+
+    const PlaylistInfo &pl = playlists[idx];
+    Serial.printf("[Storage] Switching to playlist '%s' (%s)\n", pl.name.c_str(), pl.path.c_str());
+
+    // Stop playback before the swap: setPlaylist() alone resets currentIdx
+    // but doesn't close the open file, and `songs` is reassigned in place
+    // (same vector, new contents) — a still-playing index from the old
+    // playlist would otherwise point at an unrelated song in the new one.
+    AudioMgr::stop();
+    songs = Storage::scanMusic(pl.path.c_str());
+    AudioMgr::setPlaylist(&songs);
+    UI::setSongList(&songs);
+    UI::showScreen(Screen::SONG_LIST);
+    Serial.printf("[Storage] %d songs loaded from '%s' (free=%u largest=%u)\n",
+                  songs.size(), pl.name.c_str(), ESP.getFreeHeap(), ESP.getMaxAllocHeap());
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -88,7 +114,7 @@ void uiTask(void *param) {
     uint32_t lastBtPoll = 0;
 
     for (;;) {
-        maybeMountStorage();   // one-time, once a speaker connects
+        maybeSwitchPlaylist();   // applies a pending Playlists-screen selection, if any
 
         // Update now-playing info
         const SongInfo *current = AudioMgr::currentSong();
@@ -126,16 +152,17 @@ void uiTask(void *param) {
 // INPUT TASK (Core 1) — Buttons + encoder → events
 // ═══════════════════════════════════════════════════════════
 static void handleMenuScreenCycle(bool forward) {
-    // Menu screen order: SONG_LIST → SETTINGS → BLUETOOTH → NOW_PLAYING
+    // Menu screen order: SONG_LIST → PLAYLISTS → SETTINGS → BLUETOOTH → NOW_PLAYING
     static const Screen order[] = {
-        Screen::SONG_LIST, Screen::SETTINGS, Screen::BLUETOOTH, Screen::NOW_PLAYING
+        Screen::SONG_LIST, Screen::PLAYLISTS, Screen::SETTINGS, Screen::BLUETOOTH, Screen::NOW_PLAYING
     };
+    const int n = sizeof(order) / sizeof(order[0]);
     Screen cur = UI::activeScreen();
     int idx = 0;
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < n; i++) {
         if (order[i] == cur) { idx = i; break; }
     }
-    idx = (idx + (forward ? 1 : 3)) % 4;
+    idx = (idx + (forward ? 1 : n - 1)) % n;
     UI::showScreen(order[idx]);
 }
 
@@ -278,12 +305,14 @@ void setup() {
     Serial.printf("[Heap] after BT/audio: free=%u largest=%u\n",
                   ESP.getFreeHeap(), ESP.getMaxAllocHeap());
 
-    // 4. SD is deliberately NOT mounted here. Mounting FATFS fragments the heap
-    //    down to a ~20KB largest block, and the A2DP connection handshake needs
-    //    a ~50KB contiguous block *transiently* to complete (it retains only
-    //    ~5KB once connected). So we defer the SD mount + song scan until after
-    //    a speaker is connected — see maybeMountStorage() in loop().
-    Serial.printf("[Heap] before tasks: free=%u largest=%u\n",
+    // 4. Mount SD + scan the library now, still in setup() — songs must be
+    //    browsable/playable at boot, not only after a speaker connects. Runs
+    //    AFTER BT/audio init (step 3) so Bluedroid claims its ~120KB while
+    //    the heap is still uncontested; FATFS mounting after that point measured
+    //    largest=81908 on hardware (docs/MEMORY.md), well clear of the ~50KB
+    //    the A2DP handshake needs later when a speaker actually connects.
+    mountStorageAtBoot();
+    Serial.printf("[Heap] after storage mount: free=%u largest=%u\n",
                   ESP.getFreeHeap(), ESP.getMaxAllocHeap());
 
     // 5. Spawn FreeRTOS tasks. Heap is tight after the BT stack + FATFS mount,

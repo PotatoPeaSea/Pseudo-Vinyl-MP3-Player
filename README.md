@@ -169,6 +169,17 @@ pio device monitor      # serial log @ 115200
 
 The environment is `esp32dev` (see [`firmware/platformio.ini`](firmware/platformio.ini)). Libraries: TFT_eSPI, LVGL 8.3, arduino-audio-tools, arduino-libhelix, ESP32-A2DP. The 3MB `huge_app` partition is used (no OTA) because BT Classic + LVGL + codecs don't fit the default scheme.
 
+### Debug environment (no hardware needed)
+
+`esp32dev-debug` extends `esp32dev` with `DEBUG_MODE=1` — the serial console simulates buttons/encoder input, so you can exercise the UI without wiring up physical controls.
+
+```bash
+cd firmware
+pio run -e esp32dev-debug              # build only
+pio run -e esp32dev-debug -t upload    # build + flash over USB
+pio device monitor                     # serial log @ 115200 (simulated input + [SD]/[BT]/[Audio]/[UI] logs)
+```
+
 ## Album Art Pre-Scaler Tool
 
 MP3 album art is prepared on your PC before copying music to the SD card — the device never decodes JPEG/PNG.

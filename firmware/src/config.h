@@ -95,15 +95,23 @@
 // holds the library for the whole app.
 #define MAX_SONGS           15
 
+// Playlists = top-level SD folders, plus a synthesized "All Songs" (root)
+// entry. Cheap in RAM (two Strings per entry, no song data), capped mainly
+// so the Playlists screen's LVGL button list stays bounded like Song List
+// and Bluetooth already are.
+#define MAX_PLAYLISTS       8
+
 // ── Album Art ───────────────────────────────────────────────
-// 90×90 RGB565 (16.2KB) — the vinyl label is 90px, so anything larger was
-// downscaled at display time anyway. Sized this way for the no-PSRAM
-// WROOM-32, where 240×240 (113KB) could not fit next to the BT stack.
-// On the WROVER that ceiling is gone and this could go back up, but the
-// display benefit is nil until the label itself is drawn larger — left
-// alone until the board is verified on hardware.
-// Re-run tools/prescale_art with size 90 for old 120px .art files.
-#define ART_MAX_SIDE        90
+// 240×240 RGB565 (112.5KB) — the display's native resolution, and the
+// largest size the pre-scaler tool has ever produced, so no .art file is
+// ever rejected on size grounds. The vinyl label still renders at 90px
+// (lv_img_set_zoom downscales at display time), so this cap is purely
+// about accepting whatever the tool wrote, not a rendering size. Raised
+// from 90 on the no-PSRAM WROOM-32: that board's 240×240 buffer (113KB)
+// couldn't fit next to the BT stack, but the WROVER's PSRAM absorbs
+// allocations this size automatically (anything >4KB lands in PSRAM, see
+// docs/MEMORY.md "Board change: WROOM-32 → WROVER N4R8").
+#define ART_MAX_SIDE        240
 #define ART_MAX_BYTES       (ART_MAX_SIDE * ART_MAX_SIDE * 2)
 
 // ── UI Constants ────────────────────────────────────────────

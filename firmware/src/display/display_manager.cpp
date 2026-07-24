@@ -11,12 +11,24 @@ static TFT_eSPI tft = TFT_eSPI(DISPLAY_WIDTH, DISPLAY_HEIGHT);
 // from external RAM, so a PSRAM draw buffer would flush garbage. The
 // MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL request below is load-bearing, not
 // leftover WROOM-era caution.
-// SINGLE buffer, 10 rows = 4.8KB (double buffering cost another 4.8KB for
-// rendering speed we can spare; RAM we can't). LVGL renders into the buffer,
-// waits for the SPI flush, then continues — slower refresh, half the RAM.
-// With PSRAM freeing up internal SRAM, going back to double buffering is a
-// cheap win once the board is verified.
-#define LV_BUF_ROWS 10
+//
+// 80 rows = 38.4KB, single buffer. Was 10 rows (4.8KB) from the no-PSRAM
+// ram-squeeze pass — fine when only a small art square redrew, but the
+// Now Playing vinyl now covers ~85% of the screen and spins every frame,
+// so nearly the whole display invalidates each frame. disp_flush_cb below
+// is a blocking SPI write (no async DMA), so LVGL renders+flushes one
+// buffer-height strip at a time, waiting for each; at 10 rows that's 24
+// sequential strips per frame, which is exactly the visible top-to-bottom
+// "wipe" — the screen genuinely is drawn in visible horizontal bands, not
+// updated atomically. 80 rows drops that to 3 strips/frame. (Double
+// buffering wouldn't help here without an async/DMA-driven flush_cb: LVGL
+// only starts the next strip after lv_disp_flush_ready fires, so a second
+// buffer just costs RAM with nothing to render into it concurrently — all
+// the available headroom went into one bigger buffer instead.)
+// Display::init() runs first at boot (~110KB largest contiguous internal
+// block before BT/SD claim anything), so 38.4KB here leaves ample margin;
+// watch the boot heap log if BT/SD headroom ever gets reintroduced as risky.
+#define LV_BUF_ROWS 80
 #define LV_BUF_SIZE (DISPLAY_WIDTH * LV_BUF_ROWS)
 static lv_disp_draw_buf_t draw_buf;
 static lv_color_t *buf1 = nullptr;

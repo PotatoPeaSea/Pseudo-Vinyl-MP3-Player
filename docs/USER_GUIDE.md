@@ -27,10 +27,10 @@ Everything you need to load music, pair your earbuds, and use the player day-to-
 
    For each `song.mp3` with embedded cover art this creates a small `song.art` file next to it. Prefer clicking to typing? Run `prescale_art_gui.py` instead and drop your music folder onto the window.
 
-3. **Copy your music** (the `.mp3` *and* `.art` files together) onto the card. Any folder layout works — the player scans all folders.
-4. Insert the card **before powering on**.
+3. **Copy your music** (the `.mp3` *and* `.art` files together) onto the card. Any folder layout works — the player scans all folders. **Top-level folders become playlists**: put an album or mood in its own folder (e.g. `/Road Trip/song.mp3`) and it shows up as "Road Trip" on the Playlists screen. Loose files at the card's root, and everything nested inside every folder, are always browsable together under "All Songs".
+4. Insert the card **before powering on**. The library (up to 15 songs) and playlist list load automatically at boot — no need to connect a speaker first.
 
-> **Upgrading from an older version?** Art files made before July 2026 were 240×240 (and briefly 120×120) and are ignored by the current firmware. Re-run the tool with `--force` to regenerate them at the current 90×90 size.
+> **Upgrading from an older version?** Art files made before July 2026 may be 240×240 or 120×120 — both work directly with the current firmware, no regeneration needed.
 
 ---
 
@@ -48,7 +48,7 @@ Three buttons and a rotary encoder. What they do depends on which screen you're 
 | **Encoder — rotate** | Volume up / down |
 | **Encoder — press** | Cycle play mode: Normal → Shuffle → Repeat All → Repeat One |
 
-### In menus (Library, Settings, Bluetooth)
+### In menus (Library, Playlists, Settings, Bluetooth)
 
 | Control | Action |
 |---|---|
@@ -62,7 +62,7 @@ Three buttons and a rotary encoder. What they do depends on which screen you're 
 `Next`/`Previous` cycle through the screens in this order:
 
 ```
-Library  →  Settings  →  Bluetooth  →  Now Playing  →  (back to Library)
+Library  →  Playlists  →  Settings  →  Bluetooth  →  Now Playing  →  (back to Library)
 ```
 
 ---
@@ -70,13 +70,17 @@ Library  →  Settings  →  Bluetooth  →  Now Playing  →  (back to Library)
 ## 4. The Screens
 
 ### 🎵 Library (start screen)
-A scrollable list of every MP3 found on the card, sorted alphabetically. Songs with album art show a picture icon. Rotate the encoder to browse, press **Play** to start a song — you'll jump to Now Playing.
+A scrollable list of MP3s (up to 15), sorted alphabetically. This is "All Songs" — the currently active playlist, which defaults to everything on the card. Songs with album art show a picture icon. Rotate the encoder to browse, press **Play** to start a song — you'll jump to Now Playing.
+
+### 🗂 Playlists
+One entry per top-level folder on the SD card, plus "All Songs" at the top (always available, even with no folders). Selecting a playlist rescans that folder and swaps it into the Library screen — the currently playing song stops if it belonged to a different playlist.
 
 ### 💿 Now Playing
 The signature screen: your album art spins like a record at the center, with a gold progress ring around the display edge. The song title scrolls below. Top corners show the play mode (left) and volume (right); a small Bluetooth icon appears top-center when connected.
 
 ### ⚙ Settings
 - **Output: Bluetooth / Wired (3.5mm)** — select to toggle where audio goes. Takes effect immediately (the current song restarts on the new output) and is remembered across power-offs.
+- **Playlists** — shortcut to the Playlists screen.
 - **Bluetooth Devices** — shortcut to the Bluetooth screen.
 
 ### 🔵 Bluetooth
@@ -133,7 +137,7 @@ Bluetooth switches off entirely in wired mode (saves battery). Switch back the s
 | **My earbuds never appear in the list** | Make sure they're in *pairing* mode (not just on), and close to the player. Some devices only advertise for ~60s — re-enter pairing mode. |
 | **Connected, but no sound** | Check a song is actually playing (Now Playing shows the spinning record) and volume isn't at 0. |
 | **Music sounds too fast/slow on Bluetooth** | The file isn't 44.1 kHz. Re-encode it, or use wired output. |
-| **Songs play but art shows a plain gold label** | No `.art` file next to the MP3, or an old 240×240 art file. Re-run the pre-scaler tool (`--force` to regenerate). |
+| **Songs play but art shows a plain gold label** | No `.art` file next to the MP3, or the art file is larger than 240×240 / corrupt. Re-run the pre-scaler tool (`--force` to regenerate); check the serial log for the exact reason. |
 | **Playback "frozen" in BT mode** | No sink connected — playback holds until your earbuds connect (or switch to Wired in Settings). |
 | **Wrong/garbled colors on screen** | SPI wiring issue on the display (check MOSI/SCK/DC), or a firmware build older than July 2026. |
 | **Volume knob scrolls instead of changing volume** | You're on a menu screen — volume control is on Now Playing only. |

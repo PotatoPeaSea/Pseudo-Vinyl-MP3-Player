@@ -31,6 +31,11 @@
 /* Drawing */
 #define LV_DRAW_COMPLEX          1
 #define LV_SHADOW_CACHE_SIZE     0
+/* Default is 30ms (~33fps) when left unset. UI_REFRESH_MS (config.h) drives
+ * vinyl_angle state at 60Hz, but without this LVGL only actually redraws at
+ * ~33fps, silently dropping angle steps (see docs/HANDOFF.md, "True 60fps
+ * vinyl spin"). RAM cost: zero — this is a timing constant, not a buffer. */
+#define LV_DISP_DEF_REFR_PERIOD  16
 /* 2 entries cover the two big circles (vinyl ring + art holder); smaller
  * ones re-rasterize each frame — slower, but less heap held */
 #define LV_CIRCLE_CACHE_SIZE     2

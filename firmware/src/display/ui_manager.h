@@ -26,6 +26,7 @@
 enum class Screen : uint8_t {
     NOW_PLAYING = 0,
     SONG_LIST,
+    PLAYLISTS,
     SETTINGS,
     BLUETOOTH,
 };
@@ -50,6 +51,17 @@ namespace UI {
     /// Song list source. NOT copied — the caller keeps ownership and the
     /// vector must outlive the UI (it's the app-lifetime library in main.cpp).
     void setSongList(const std::vector<SongInfo> *songs);
+
+    /// Playlist list source (folders under the SD root). NOT copied — same
+    /// ownership rule as setSongList.
+    void setPlaylists(const std::vector<PlaylistInfo> *playlists);
+
+    /// Returns the index of a playlist the user picked on the Playlists
+    /// screen since the last call, or -1 if none. Scanning a folder's songs
+    /// touches SD/heap, so the UI only records the request here; main.cpp
+    /// does the actual rescan + AudioMgr::setPlaylist/UI::setSongList swap
+    /// (same deferred pattern as pendingScreen).
+    int pollPlaylistSelect();
 
     /// Now Playing: update with current song info
     void setNowPlaying(const SongInfo *song, bool playing);

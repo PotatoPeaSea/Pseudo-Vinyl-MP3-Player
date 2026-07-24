@@ -26,6 +26,8 @@ static lv_group_t *cur_grp = nullptr;       // focus group of the active screen
 
 // ── Persistent UI state (survives screen rebuilds) ──────────
 static const std::vector<SongInfo> *songLib = nullptr;  // owned by main.cpp
+static const std::vector<PlaylistInfo> *playlistLib = nullptr;  // owned by main.cpp
+static volatile int pendingPlaylistSelect = -1;          // index into playlistLib, set by click cb
 static std::vector<BtDevice> btDevices;                 // capped at MAX_BT_DEVICES
 static String btStatus = "Off";
 
@@ -40,10 +42,12 @@ static bool keyDown = false;
 
 // ── Now Playing widgets (null unless that screen is active) ─
 static lv_obj_t *np_title_label = nullptr;
+static lv_obj_t *np_title_label_shadow = nullptr;   // dup label, dark+offset, behind np_title_label
 static lv_obj_t *np_art_holder = nullptr;   // rotating circle (clips art)
 static lv_obj_t *np_art_img = nullptr;      // album art image
 static lv_obj_t *np_progress_arc = nullptr;
 static lv_obj_t *np_time_label = nullptr;
+static lv_obj_t *np_time_label_shadow = nullptr;    // dup label, dark+offset, behind np_time_label
 static lv_obj_t *np_mode_label = nullptr;
 static lv_obj_t *np_vol_label = nullptr;
 static lv_obj_t *np_bt_label = nullptr;
@@ -66,6 +70,9 @@ static int16_t vinyl_angle = 0;
 // ── Song list widgets ───────────────────────────────────────
 static lv_obj_t *sl_list = nullptr;
 
+// ── Playlists widgets ────────────────────────────────────────
+static lv_obj_t *pl_list = nullptr;
+
 // ── Bluetooth widgets ───────────────────────────────────────
 static lv_obj_t *bt_status_label = nullptr;
 static lv_obj_t *bt_list = nullptr;
@@ -73,6 +80,7 @@ static lv_obj_t *bt_list = nullptr;
 // ── Forward declarations ────────────────────────────────────
 static lv_obj_t *createNowPlayingScreen();
 static lv_obj_t *createSongListScreen();
+static lv_obj_t *createPlaylistsScreen();
 static lv_obj_t *createSettingsScreen();
 static lv_obj_t *createBluetoothScreen();
 static void songListClickCb(lv_event_t *e);
@@ -84,6 +92,21 @@ static void songListClickCb(lv_event_t *e);
 #define COL_TEXT        lv_color_hex(0xf0e6d0)
 #define COL_TEXT_DIM    lv_color_hex(0x8b6340)
 #define COL_VINYL       lv_color_hex(0x1a1a1a)
+// Drop-shadow copy behind Now Playing text: near-black, partly transparent,
+// so the real label stays legible over unpredictable album art colors
+// (LVGL 8 labels have no per-glyph shadow property — see docs/HANDOFF.md,
+// "Drop shadow on the Now Playing title text").
+#define COL_TEXT_SHADOW lv_color_hex(0x000000)
+
+// ── Vinyl geometry (Now Playing) ─────────────────────────────
+// Album art fills most of the round screen, with the vinyl record showing
+// only as a thin ring at the edge and the progress arc just outside that,
+// near the physical screen edge. Referenced by both loadArtFor's zoom calc
+// and createNowPlayingScreen's layout, so it lives above both.
+#define VINYL_ART_PX     ((DISPLAY_WIDTH * 85) / 100)  // ~85% of the screen
+#define VINYL_RING_PX    (VINYL_ART_PX + 16)            // ~8px of vinyl showing per side
+#define VINYL_ARC_PX     (DISPLAY_WIDTH - 4)            // progress ring, near the rim
+#define VINYL_SPINDLE_PX 16
 
 // ── Styles (initialized once; shared across screen rebuilds) ─
 static lv_style_t style_bg;
@@ -182,6 +205,7 @@ static void loadArtFor(const SongInfo *song) {
     art_path = song->filepath;
 
     if (!song->hasArt) {
+        Serial.printf("[UI] hasArt=false for %s, showing default label\n", song->filepath.c_str());
         showDefaultArt();
         return;
     }
@@ -211,20 +235,24 @@ static void loadArtFor(const SongInfo *song) {
 
     lv_img_cache_invalidate_src(&art_dsc);
     lv_img_set_src(np_art_img, &art_dsc);
-    // Scale to fill the 90px holder
-    lv_img_set_zoom(np_art_img, (256 * 90) / side);
+    // Scale to fill the art holder
+    lv_img_set_zoom(np_art_img, (256 * VINYL_ART_PX) / side);
     lv_obj_clear_flag(np_art_img, LV_OBJ_FLAG_HIDDEN);
     lv_obj_center(np_art_img);
 
     // Free the previous buffer only after the new src is applied
     if (art_data) free(art_data);
     art_data = newArt;
+    Serial.printf("[UI] Art shown for %s (%ux%u, %u bytes)\n",
+                  song->filepath.c_str(), (unsigned)side, (unsigned)side, (unsigned)artSize);
 }
 
 // ═══════════════════════════════════════════════════════════
 // NOW PLAYING SCREEN
 // ═══════════════════════════════════════════════════════════
 
+// All centered (0,0): with the art this large there's no spare room to
+// shift it off-center without clipping the top against the round display.
 static lv_obj_t *createNowPlayingScreen() {
     lv_obj_t *scr = lv_obj_create(NULL);
     lv_obj_add_style(scr, &style_bg, 0);
@@ -232,8 +260,8 @@ static lv_obj_t *createNowPlayingScreen() {
     // ── Vinyl record (circular background) ──────────────────
     // Outer vinyl circle
     lv_obj_t *vinyl_ring = lv_obj_create(scr);
-    lv_obj_set_size(vinyl_ring, 180, 180);
-    lv_obj_align(vinyl_ring, LV_ALIGN_CENTER, 0, -15);
+    lv_obj_set_size(vinyl_ring, VINYL_RING_PX, VINYL_RING_PX);
+    lv_obj_align(vinyl_ring, LV_ALIGN_CENTER, 0, 0);
     lv_obj_set_style_radius(vinyl_ring, LV_RADIUS_CIRCLE, 0);
     lv_obj_set_style_bg_color(vinyl_ring, COL_VINYL, 0);
     lv_obj_set_style_bg_opa(vinyl_ring, LV_OPA_COVER, 0);
@@ -243,7 +271,7 @@ static lv_obj_t *createNowPlayingScreen() {
 
     // Album art holder (center circle, rotates; clips the art square)
     np_art_holder = lv_obj_create(vinyl_ring);
-    lv_obj_set_size(np_art_holder, 90, 90);
+    lv_obj_set_size(np_art_holder, VINYL_ART_PX, VINYL_ART_PX);
     lv_obj_align(np_art_holder, LV_ALIGN_CENTER, 0, 0);
     lv_obj_set_style_radius(np_art_holder, LV_RADIUS_CIRCLE, 0);
     lv_obj_set_style_bg_color(np_art_holder, COL_ACCENT, 0);
@@ -260,7 +288,7 @@ static lv_obj_t *createNowPlayingScreen() {
 
     // Spindle hole
     lv_obj_t *spindle = lv_obj_create(np_art_holder);
-    lv_obj_set_size(spindle, 8, 8);
+    lv_obj_set_size(spindle, VINYL_SPINDLE_PX, VINYL_SPINDLE_PX);
     lv_obj_align(spindle, LV_ALIGN_CENTER, 0, 0);
     lv_obj_set_style_radius(spindle, LV_RADIUS_CIRCLE, 0);
     lv_obj_set_style_bg_color(spindle, COL_VINYL, 0);
@@ -269,8 +297,8 @@ static lv_obj_t *createNowPlayingScreen() {
 
     // ── Progress arc (around the vinyl) ─────────────────────
     np_progress_arc = lv_arc_create(scr);
-    lv_obj_set_size(np_progress_arc, 200, 200);
-    lv_obj_align(np_progress_arc, LV_ALIGN_CENTER, 0, -15);
+    lv_obj_set_size(np_progress_arc, VINYL_ARC_PX, VINYL_ARC_PX);
+    lv_obj_align(np_progress_arc, LV_ALIGN_CENTER, 0, 0);
     lv_arc_set_rotation(np_progress_arc, 270);
     lv_arc_set_range(np_progress_arc, 0, 100);
     lv_arc_set_value(np_progress_arc, 0);
@@ -283,6 +311,21 @@ static lv_obj_t *createNowPlayingScreen() {
     lv_obj_clear_flag(np_progress_arc, LV_OBJ_FLAG_CLICKABLE);
 
     // ── Text labels (below vinyl) ───────────────────────────
+    // Shadow copies are created FIRST so they sit behind the real label in
+    // z-order (LVGL draws children in creation order). Identical text/font/
+    // width/alignment, offset 1px down-right, near-black at partial opacity
+    // — the standard fake-glyph-shadow technique since LVGL 8 labels have no
+    // native per-glyph shadow (see docs/HANDOFF.md).
+    np_title_label_shadow = lv_label_create(scr);
+    lv_obj_add_style(np_title_label_shadow, &style_title, 0);
+    lv_obj_set_style_text_color(np_title_label_shadow, COL_TEXT_SHADOW, 0);
+    lv_obj_set_style_text_opa(np_title_label_shadow, LV_OPA_60, 0);
+    lv_label_set_text(np_title_label_shadow, "No Song");
+    lv_label_set_long_mode(np_title_label_shadow, LV_LABEL_LONG_SCROLL_CIRCULAR);
+    lv_obj_set_width(np_title_label_shadow, 200);
+    lv_obj_align(np_title_label_shadow, LV_ALIGN_BOTTOM_MID, 1, -39);
+    lv_obj_set_style_text_align(np_title_label_shadow, LV_TEXT_ALIGN_CENTER, 0);
+
     np_title_label = lv_label_create(scr);
     lv_obj_add_style(np_title_label, &style_title, 0);
     lv_label_set_text(np_title_label, "No Song");
@@ -291,7 +334,16 @@ static lv_obj_t *createNowPlayingScreen() {
     lv_obj_align(np_title_label, LV_ALIGN_BOTTOM_MID, 0, -40);
     lv_obj_set_style_text_align(np_title_label, LV_TEXT_ALIGN_CENTER, 0);
 
-    // Time label
+    // Time label (+ shadow copy, same technique — lower risk than the title
+    // since this one never scrolls, no drift to worry about)
+    np_time_label_shadow = lv_label_create(scr);
+    lv_obj_add_style(np_time_label_shadow, &style_subtitle, 0);
+    lv_obj_set_style_text_color(np_time_label_shadow, COL_TEXT_SHADOW, 0);
+    lv_obj_set_style_text_opa(np_time_label_shadow, LV_OPA_60, 0);
+    lv_label_set_text(np_time_label_shadow, "0:00 / 0:00");
+    lv_obj_align(np_time_label_shadow, LV_ALIGN_BOTTOM_MID, 1, -17);
+    lv_obj_set_style_text_align(np_time_label_shadow, LV_TEXT_ALIGN_CENTER, 0);
+
     np_time_label = lv_label_create(scr);
     lv_obj_add_style(np_time_label, &style_subtitle, 0);
     lv_label_set_text(np_time_label, "0:00 / 0:00");
@@ -395,11 +447,72 @@ static lv_obj_t *createSongListScreen() {
 }
 
 // ═══════════════════════════════════════════════════════════
+// PLAYLISTS SCREEN (top-level SD folders)
+// ═══════════════════════════════════════════════════════════
+
+static void playlistClickCb(lv_event_t *e) {
+    uint32_t idx = (uint32_t)(uintptr_t)lv_event_get_user_data(e);
+    // Just record the request — rescanning SD is too heavy for an LVGL
+    // event callback (same reasoning as songListClickCb deferring the
+    // actual play() to the audio task). main.cpp's uiTask loop picks this
+    // up via pollPlaylistSelect() and does the rescan + screen switch.
+    pendingPlaylistSelect = (int)idx;
+}
+
+static void populatePlaylistList() {
+    if (!pl_list) return;
+    lv_obj_clean(pl_list);
+    if (!playlistLib) return;
+
+    for (size_t i = 0; i < playlistLib->size(); i++) {
+        const PlaylistInfo &pl = (*playlistLib)[i];
+        const char *icon = (i == 0) ? LV_SYMBOL_AUDIO : LV_SYMBOL_DIRECTORY;
+        lv_obj_t *btn = lv_list_add_btn(pl_list, icon, pl.name.c_str());
+        setupListBtn(btn, cur_grp);
+        lv_obj_add_event_cb(btn, playlistClickCb, LV_EVENT_CLICKED, (void *)(uintptr_t)i);
+    }
+    if (playlistLib->empty()) {
+        lv_obj_t *btn = lv_list_add_btn(pl_list, LV_SYMBOL_WARNING, "No playlists found");
+        lv_obj_add_style(btn, &style_list_btn, 0);
+        lv_obj_clear_flag(btn, LV_OBJ_FLAG_CLICKABLE);
+    }
+}
+
+static lv_obj_t *createPlaylistsScreen() {
+    lv_obj_t *scr = lv_obj_create(NULL);
+    lv_obj_add_style(scr, &style_bg, 0);
+    cur_grp = lv_group_create();
+
+    // Header
+    lv_obj_t *header = lv_label_create(scr);
+    lv_obj_add_style(header, &style_title, 0);
+    lv_label_set_text(header, LV_SYMBOL_DIRECTORY " Playlists");
+    lv_obj_set_style_text_color(header, COL_ACCENT, 0);
+    lv_obj_align(header, LV_ALIGN_TOP_MID, 0, 8);
+
+    // Scrollable list — one entry per top-level SD folder, plus "All Songs"
+    pl_list = lv_list_create(scr);
+    lv_obj_set_size(pl_list, 230, 200);
+    lv_obj_align(pl_list, LV_ALIGN_CENTER, 0, 10);
+    lv_obj_set_style_bg_color(pl_list, COL_BG, 0);
+    lv_obj_set_style_bg_opa(pl_list, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(pl_list, 0, 0);
+    lv_obj_set_style_pad_row(pl_list, 2, 0);
+
+    populatePlaylistList();
+    return scr;
+}
+
+// ═══════════════════════════════════════════════════════════
 // SETTINGS SCREEN
 // ═══════════════════════════════════════════════════════════
 
 static void btMenuCb(lv_event_t *e) {
     UI::showScreen(Screen::BLUETOOTH);
+}
+
+static void playlistsMenuCb(lv_event_t *e) {
+    UI::showScreen(Screen::PLAYLISTS);
 }
 
 static lv_obj_t *createSettingsScreen() {
@@ -426,6 +539,11 @@ static lv_obj_t *createSettingsScreen() {
     lv_obj_t *out_btn = lv_list_add_btn(list, LV_SYMBOL_VOLUME_MAX, "Output: Bluetooth");
     setupListBtn(out_btn, cur_grp);
     lv_obj_clear_flag(out_btn, LV_OBJ_FLAG_CLICKABLE);
+
+    // Playlists menu
+    lv_obj_t *pl_btn = lv_list_add_btn(list, LV_SYMBOL_DIRECTORY, "Playlists");
+    setupListBtn(pl_btn, cur_grp);
+    lv_obj_add_event_cb(pl_btn, playlistsMenuCb, LV_EVENT_CLICKED, nullptr);
 
     // Bluetooth device menu
     lv_obj_t *bt_btn = lv_list_add_btn(list, LV_SYMBOL_BLUETOOTH, "Bluetooth Devices");
@@ -508,9 +626,12 @@ static lv_obj_t *createBluetoothScreen() {
 // Null out all widget references and free per-screen data. The objects
 // themselves die with the outgoing screen's lv_obj_del.
 static void clearWidgetRefs() {
-    np_title_label = np_art_holder = np_art_img = np_progress_arc = nullptr;
-    np_time_label = np_mode_label = np_vol_label = np_bt_label = nullptr;
+    np_title_label = np_title_label_shadow = nullptr;
+    np_art_holder = np_art_img = np_progress_arc = nullptr;
+    np_time_label = np_time_label_shadow = nullptr;
+    np_mode_label = np_vol_label = np_bt_label = nullptr;
     sl_list = nullptr;
+    pl_list = nullptr;
     bt_status_label = nullptr;
     bt_list = nullptr;
     freeArt();   // reclaim up to ART_MAX_BYTES while off the Now Playing screen
@@ -546,6 +667,7 @@ static void doShowScreen(Screen screen) {
     switch (screen) {
         case Screen::NOW_PLAYING: scr = createNowPlayingScreen(); break;
         case Screen::SONG_LIST:   scr = createSongListScreen();   break;
+        case Screen::PLAYLISTS:   scr = createPlaylistsScreen();  break;
         case Screen::SETTINGS:    scr = createSettingsScreen();   break;
         case Screen::BLUETOOTH:   scr = createBluetoothScreen();  break;
     }
@@ -598,18 +720,33 @@ void UI::update() {
         doShowScreen(s);
     }
 
-    // Spin the vinyl if playing
-    if (AudioMgr::isPlaying() && np_art_holder) {
+    // Spin the vinyl if playing. np_art_holder is a plain lv_obj (rect
+    // draw only) used just to clip the art to a circle — LVGL 8 ignores
+    // transform_angle/zoom on rectangle backgrounds, and a parent's
+    // transform never propagates to its children, so the rotation must be
+    // applied directly to np_art_img (an lv_img, the one widget type that
+    // actually rotates its drawn content). Pivot re-centers automatically
+    // to the source image's own w/2,h/2 every time lv_img_set_src runs.
+    if (AudioMgr::isPlaying() && np_art_img) {
         vinyl_angle = (vinyl_angle + VINYL_SPIN_SPEED_DEG) % 360;
-        lv_obj_set_style_transform_angle(np_art_holder, vinyl_angle * 10, 0);
-        lv_obj_set_style_transform_pivot_x(np_art_holder, 45, 0);
-        lv_obj_set_style_transform_pivot_y(np_art_holder, 45, 0);
+        lv_img_set_angle(np_art_img, vinyl_angle * 10);
     }
 }
 
 void UI::setSongList(const std::vector<SongInfo> *songs) {
     songLib = songs;
     if (sl_list) populateSongList();   // song-list screen currently shown
+}
+
+void UI::setPlaylists(const std::vector<PlaylistInfo> *playlists) {
+    playlistLib = playlists;
+    if (pl_list) populatePlaylistList();   // playlists screen currently shown
+}
+
+int UI::pollPlaylistSelect() {
+    int idx = pendingPlaylistSelect;
+    pendingPlaylistSelect = -1;
+    return idx;
 }
 
 void UI::setNowPlaying(const SongInfo *song, bool playing) {
@@ -619,10 +756,13 @@ void UI::setNowPlaying(const SongInfo *song, bool playing) {
     np_last_song = song;
 
     if (song) {
-        lv_label_set_text(np_title_label, Storage::songTitle(*song).c_str());
+        String title = Storage::songTitle(*song);
+        lv_label_set_text(np_title_label, title.c_str());
+        if (np_title_label_shadow) lv_label_set_text(np_title_label_shadow, title.c_str());
         loadArtFor(song);
     } else {
         lv_label_set_text(np_title_label, "No Song");
+        if (np_title_label_shadow) lv_label_set_text(np_title_label_shadow, "No Song");
         art_path = "";
         showDefaultArt();
     }
@@ -642,6 +782,7 @@ void UI::setProgress(uint32_t currentSec, uint32_t totalSec) {
         currentSec / 60, currentSec % 60,
         totalSec / 60, totalSec % 60);
     lv_label_set_text(np_time_label, buf);
+    if (np_time_label_shadow) lv_label_set_text(np_time_label_shadow, buf);
 }
 
 void UI::setVolume(int vol, int maxVol) {

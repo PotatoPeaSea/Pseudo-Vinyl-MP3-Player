@@ -6,10 +6,12 @@ Extracts embedded album art from MP3 files, resizes to 90x90,
 and converts to RGB565 raw bitmap (.art) for direct loading on
 the ESP32 display.
 
-The 90px default matches the firmware's ART_MAX_SIDE — it is the
-exact size of the vinyl label on screen, and the ESP32-WROOM-32
-has no PSRAM, so larger art wastes RAM (and is rejected by the
-device).
+The 90px default is the exact size of the vinyl label on screen —
+larger art is just downscaled at display time, so 90px keeps files
+small. The firmware's ART_MAX_SIDE is 240 (the display's native
+resolution, and the largest size this tool can produce), so sizes
+up to 240 are accepted directly; nothing above that is ever useful
+since --size is capped at 240 below.
 
 Usage:
     python prescale_art.py /path/to/music
@@ -41,7 +43,8 @@ except ImportError:
 
 # ── Constants ────────────────────────────────────────────────────────────────
 
-# Must not exceed ART_MAX_SIDE in firmware/src/config.h (no PSRAM on WROOM-32)
+# Matches the on-screen vinyl label size. Must not exceed ART_MAX_SIDE (240)
+# in firmware/src/config.h.
 DEFAULT_ART_SIZE = 90
 ART_EXTENSION = ".art"
 SUPPORTED_FORMATS = ("rgb565", "jpeg")
@@ -220,17 +223,15 @@ def main():
         type=int,
         default=DEFAULT_ART_SIZE,
         help=f"Output side length in pixels. Default: {DEFAULT_ART_SIZE} "
-             "(firmware rejects art larger than 90)",
+             "(firmware accepts up to 240; larger art is just downscaled "
+             "on screen, so bigger only means a bigger file)",
     )
 
     args = parser.parse_args()
 
     if args.size < 16 or args.size > 240:
-        print("ERROR: --size must be between 16 and 240.")
+        print("ERROR: --size must be between 16 and 240 (firmware's ART_MAX_SIDE).")
         sys.exit(1)
-    if args.size > 90:
-        print("WARNING: sizes above 90 exceed the firmware's ART_MAX_SIDE "
-              "and will be ignored by the device.")
 
     music_dir = Path(args.directory).resolve()
     if not music_dir.is_dir():

@@ -374,7 +374,8 @@ core-function memory at boot, when the heap is deterministic.
 
 The module changed to an **ESP32-WROVER N4R8**: same classic ESP32 die (so
 Bluetooth Classic / A2DP still works — the reason the S3 was rejected), 4MB
-flash, plus **8MB PSRAM**. Not yet verified on hardware.
+flash, plus **8MB PSRAM**. Flashed and part-verified on hardware
+(2026-07-23) — see "Hardware bring-up results" below.
 
 ### Why the pins moved
 
@@ -469,3 +470,60 @@ expected to fix it.
 `pio run -e esp32dev`: static RAM **54,100 bytes (16.5%)**, flash 1,650,857.
 Up ~2.1KB static from the WROOM build (51,996) — the PSRAM HAL and cache
 workaround. Both `esp32dev` and `esp32dev-debug` compile clean.
+
+### Hardware bring-up results (2026-07-23, CH340 board on COM10)
+
+Flashed and booted. **The PSRAM change is transformative — this is the
+headline number:**
+
+| Checkpoint | WROOM-32 (before) | WROVER N4R8 (now) |
+|---|---|---|
+| Boot start | — | free=212332 largest=110580 |
+| After display+UI | — | free=205308 largest=110580 |
+| **After BT init** | **~33KB free / ~20KB largest** | **free=116136 largest=106484** |
+| After tasks launched | — | free=97600 |
+| SD mounted + 15-song list | list truncated at 0/15 | free=92972 **largest=81908** |
+
+The largest contiguous block after BT init went from ~20KB to ~106KB, and
+~82KB survives a mounted SD plus a full song list. Every failure in the
+sections above — the A2DP handshake's 50KB transient, the media-start
+starvation, the LVGL NULL-deref, the helix 5KB allocation loss, the input
+task's stack — was a symptom of that number being 12–20KB. It is now 4–5×
+larger, with 4MB of PSRAM still untouched behind it.
+
+**Verified working:**
+
+- Normal boot: `rst:0x1 (POWERON_RESET), boot:0x1b (SPI_FAST_FLASH_BOOT)`.
+  **The GPIO 0 strapping hazard did not materialize** on this hardware —
+  the board boots to the app, and esptool's download-mode entry (which
+  drives GPIO 0 low) also works with the panel attached. Keep the caution
+  note anyway; this is one board, and a marginal pull is exactly the kind
+  of thing that fails intermittently or on a different panel.
+- `psramInit(): PSRAM enabled`, `[PSRAM] ok: size=4192107` — ~4MB mapped,
+  as expected for an 8MB part (the rest is behind himem).
+- SD on the **new** pins (SCLK 21 / MOSI 18 / MISO 22 / CS 19): mounted a
+  7645MB card, found 15 MP3s, built all 15 list buttons with no truncation.
+  One benign `sd_diskio.cpp: sdCommand(): no token received` warning during
+  init retry; the mount succeeded regardless.
+- Display + LVGL init, all three tasks started on core 1.
+
+**NOT verified — still open:**
+
+- **The panel image itself.** `Display::init()` succeeding only proves the
+  driver ran; it does not prove pixels are correct. Both SPI buses are
+  GPIO-matrix routed at 40MHz now, so tearing/garbage is plausible and
+  needs eyes on the screen. Drop `SPI_FREQUENCY` to 27000000 if it looks
+  wrong.
+- **Physical buttons/encoder**, in particular PREV on its new GPIO 4.
+  Init ran, but no press was ever observed.
+- **Audio playback.** No speaker was paired during the test — discovery ran
+  and repeatedly logged `Device discovery failed, continue to discover...`
+  with nothing to find. A2DP streaming, the L2CAP congestion stutter, and
+  the stall watchdog are all completely untested on this board.
+
+Testing SD required temporarily removing the `isStreaming()` gate in
+`maybeMountStorage()`, since the deferred mount otherwise never runs without
+a speaker. That patch was reverted; the device was reflashed with the
+committed firmware. Worth noting the gate now costs more than it buys —
+the mount ran at largest=86004 with no ill effect, which is the follow-up
+item about reconsidering the deferred mount.

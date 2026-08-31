@@ -198,3 +198,67 @@ computation itself* is off — check next, in order of likelihood:
   the audio task, but `durationSec()` runs on the UI task and reads
   `curFile.position()`/`curFileSize`/`id3TagSize` without synchronization.
   Nothing in this codebase currently protects that.
+
+---
+
+## 4. Power-efficiency pass — implemented, flashed, builds clean, NOT hardware-verified
+
+Four changes, none visually or electrically confirmed on the panel/board yet
+(no USB power meter used). Builds clean on both `esp32dev` and
+`esp32dev-debug`. In rough order of risk:
+
+1. **Halved the LVGL redraw rate** (`firmware/src/lv_conf.h`
+   `LV_DISP_DEF_REFR_PERIOD` 16→32ms, `firmware/src/config.h`
+   `UI_REFRESH_MS` 16→32ms, kept in lockstep on purpose — see the mismatch
+   bug this exact pairing already caused once, item 1 above). Vinyl spin
+   still advances exactly 1°/rendered frame (`VINYL_SPIN_SPEED_DEG`,
+   unchanged), so the per-frame jump that was confirmed non-jittery is
+   preserved — the visible effect should be a slower rotation (~12s/rev
+   instead of ~6s), not choppiness. **Watch for:** if it looks jittery
+   anyway, the redraw-rate assumption above is wrong and needs revisiting;
+   if the rotation speed itself is undesirable, adjust
+   `VINYL_SPIN_SPEED_DEG` rather than reverting the redraw rate.
+2. **SD read chunk size** (`firmware/src/audio/audio_manager.cpp`
+   `AudioMgr::init()`, `SD_READ_CHUNK_BYTES` in `config.h`) grown from the
+   `audio_tools::StreamCopy` library default of 1KB to 8KB — fewer, larger
+   SD reads per second of playback. Applied via `copier.resize()` after
+   `decoder.begin()` in `AudioMgr::init()` (i.e. after `psramInit()` has
+   run, per the static-init-order caution already documented for this
+   project), not at `copier`'s static construction. >4KB allocations land
+   in PSRAM automatically per the project's existing malloc config, so this
+   is not competing with the internal-SRAM budget the WROOM-32 era fought
+   over. **Watch for:** `[BT] underrun` / `ringbuf send timeout` messages
+   in serial — a bigger read could in theory make SD-read latency spikes
+   larger (fewer but longer blocking reads), though the BT ring buffer
+   should absorb it same as before.
+3. **CPU clock dropped 240MHz → 160MHz** (`firmware/platformio.ini`,
+   `board_build.f_cpu`). A fixed boot-time clock, not runtime dynamic
+   scaling — deliberately avoided given how timing-sensitive this project's
+   audio/BT path has proven (helix decode watchdog, A2DP stall watchdog).
+   160MHz is Espressif's documented floor for full BT Classic support (only
+   sub-80MHz drops it), so there's real margin, but decode headroom at
+   160MHz vs. 240MHz has never been measured on this hardware. **This is
+   the riskiest of the four changes — if audio stutters or drops after
+   flashing, revert this line first** before touching anything else, then
+   re-test in isolation from items 1–2 above.
+4. **Backlight dimming was investigated and is NOT possible on this
+   hardware** — `firmware/src/display/display_manager.cpp` confirms the
+   GC9A01 module's backlight is hardwired on-board with no control pin
+   (`Display::setBacklight()` is already a documented no-op). Not
+   implemented; would need a hardware mod (cut the BL trace, wire it to a
+   spare GPIO) to ever be possible.
+
+**Not changed, investigated and found already optimal:**
+- **BT discovery/scanning power**: confirmed via the `ESP32-A2DP` library
+  source (`BluetoothA2DPSource.cpp`, `ESP_BT_GAP_DISC_RES_EVT` handler) that
+  discovery is cancelled (`esp_bt_gap_cancel_discovery()`) the moment the
+  saved target device is seen, and only restarts on disconnect. Matches
+  `bt_manager.h`'s documented behavior ("discovery runs continuously while
+  unconnected"). No continuous-scan-while-connected drain exists to fix.
+- **Decoder re-init frequency**: `decoder.begin()` (the ~25KB helix
+  free+realloc) only runs at boot and once per track start — never per
+  frame or per UI tick — and the per-track call is load-bearing (resets the
+  parser for the new file's byte stream), not incidental. Nothing to trim
+  without reintroducing the exact watchdog-spin failure mode already
+  documented for this decoder (`AudioMgr::init()`'s comment,
+  `doPlay()`'s).

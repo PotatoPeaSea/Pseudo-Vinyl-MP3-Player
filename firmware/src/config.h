@@ -80,6 +80,17 @@
 // entirely. 10KB is the compromise — underrun telemetry in the data
 // callback measures whether it is enough. Allocated once at boot.
 #define BT_RINGBUF_BYTES    (10 * 1024)
+// SD→decoder read chunk (audio_tools::StreamCopy). Library default is 1KB —
+// bumped to 8KB so the SD card does fewer, larger reads per second of
+// playback instead of many small ones (each SD command/wake has fixed
+// overhead; audio doesn't care about read granularity since the BT ring
+// buffer already decouples SD burstiness from the output). >4KB lands in
+// PSRAM automatically (see platformio.ini's CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL
+// note), so this is not competing with the WROOM-era internal-SRAM budget.
+// Applied via copier.resize() in AudioMgr::init() (after PSRAM is up), not
+// at the StreamCopy static constructor (which runs before psramInit() —
+// see docs/MEMORY.md on static-init-order hazards on this project).
+#define SD_READ_CHUNK_BYTES (8 * 1024)
 // Cap on the discovery list — every entry costs a String on the heap and a
 // ~700-byte LVGL button; without a cap a busy radio environment grows it
 // unbounded.
@@ -115,10 +126,26 @@
 #define ART_MAX_BYTES       (ART_MAX_SIDE * ART_MAX_SIDE * 2)
 
 // ── UI Constants ────────────────────────────────────────────
-#define VINYL_SPIN_SPEED_DEG 1       // Degrees per frame — was 2 (120°/s);
-                                      // halved because the bigger per-frame
-                                      // jump looked jittery even at a
-                                      // confirmed 60Hz redraw (LV_DISP_DEF_REFR_PERIOD)
-#define UI_REFRESH_MS        16      // ~60fps LVGL tick
+#define VINYL_SPIN_SPEED_DEG 1       // Degrees per RENDERED frame — was 2
+                                      // (120°/s); halved because the bigger
+                                      // per-frame jump looked jittery even
+                                      // at a confirmed 60Hz redraw
+                                      // (LV_DISP_DEF_REFR_PERIOD). Left at 1
+                                      // when the redraw rate itself was
+                                      // later halved to 30fps (below) —
+                                      // rotation just takes twice as long
+                                      // (~12s/rev) rather than reintroducing
+                                      // a bigger per-frame jump.
+#define UI_REFRESH_MS        32      // ~30fps LVGL tick — was 16 (60fps);
+                                      // halved for power (fewer blocking SPI
+                                      // flushes/sec, see lv_conf.h). MUST
+                                      // match LV_DISP_DEF_REFR_PERIOD in
+                                      // lv_conf.h or vinyl_angle (ui_manager.cpp)
+                                      // advances faster than LVGL actually
+                                      // redraws, silently dropping angle
+                                      // steps (docs/HANDOFF.md "True 60fps
+                                      // vinyl spin" — same bug, inverse
+                                      // direction). Not yet re-confirmed
+                                      // smooth on hardware.
 #define INPUT_POLL_MS        5       // Button/encoder poll interval
 #define DEBOUNCE_MS          50      // Button debounce

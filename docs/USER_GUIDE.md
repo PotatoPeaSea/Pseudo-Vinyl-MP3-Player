@@ -1,6 +1,6 @@
 # Pseudo Vinyl MP3 Player — User Guide
 
-Everything you need to load music, pair your earbuds, and use the player day-to-day. For build instructions and internals, see the [README](../README.md); for hardware wiring, see the [PRD](PRD.md).
+Everything you need to load music, pair your earbuds, and use the player day-to-day. For build instructions and internals, see the [README](../README.md); for hardware wiring, see the [README's Wiring section](../README.md#wiring) (the authoritative source is `firmware/src/config.h` — the [PRD](PRD.md) wiring table predates the current board and is out of date).
 
 ---
 
@@ -8,8 +8,8 @@ Everything you need to load music, pair your earbuds, and use the player day-to-
 
 - The player (or a breadboard prototype), charged or on USB power
 - A **microSD card, formatted FAT32** (up to 32 GB)
-- MP3 files (44.1 kHz recommended — see [Tips](#7-tips--limitations))
-- Bluetooth earbuds/speaker, **or** wired headphones (3.5mm) if using the DAC output
+- MP3 files (44.1 kHz recommended — see [Tips](#6-tips--limitations))
+- Bluetooth earbuds or a speaker — audio output is Bluetooth-only, there's no wired jack
 - A PC with Python for preparing album art (optional but recommended)
 
 ---
@@ -79,7 +79,7 @@ One entry per top-level folder on the SD card, plus "All Songs" at the top (alwa
 The signature screen: your album art spins like a record at the center, with a gold progress ring around the display edge. The song title scrolls below. Top corners show the play mode (left) and volume (right); a small Bluetooth icon appears top-center when connected.
 
 ### ⚙ Settings
-- **Output: Bluetooth / Wired (3.5mm)** — select to toggle where audio goes. Takes effect immediately (the current song restarts on the new output) and is remembered across power-offs.
+- **Output: Bluetooth** — informational only; Bluetooth is the only output on this board, so there's nothing to select here.
 - **Playlists** — shortcut to the Playlists screen.
 - **Bluetooth Devices** — shortcut to the Bluetooth screen.
 
@@ -90,37 +90,28 @@ Shows connection status and a live list of discovered audio devices. See the nex
 
 ## 5. Pairing Bluetooth Earbuds
 
-1. Make sure **Output: Bluetooth** is set in Settings (it's the factory default).
-2. Put your earbuds/speaker in **pairing mode**.
-3. Go to the **Bluetooth** screen. The player scans continuously — nearby devices appear in the list within a few seconds ("Searching…" shows while the list is empty).
-4. Rotate the encoder to highlight your device and press **Play** to select it. The status line shows "Connecting…", then "Connected".
-5. Play a song. Audio now streams to your earbuds.
+1. Put your earbuds/speaker in **pairing mode**.
+2. Go to the **Bluetooth** screen. The player scans continuously — nearby devices appear in the list within a few seconds ("Searching…" shows while the list is empty).
+3. Rotate the encoder to highlight your device and press **Play** to select it. The status line shows "Connecting…", then "Connected".
+4. Play a song. Audio now streams to your earbuds.
 
 **Auto-reconnect:** the player remembers your device and reconnects to it automatically on every boot — you only pair once. To switch to different earbuds, just pick another device from the Bluetooth list.
 
-**No sink connected?** In Bluetooth mode, playback politely waits (it won't silently burn through your playlist) until a device connects.
+**No sink connected?** Playback politely waits (it won't silently burn through your playlist) until a device connects.
 
 ---
 
-## 6. Wired Listening
+## 6. Tips & Limitations
 
-1. Plug headphones into the 3.5mm jack.
-2. Settings → **Output** → select until it reads **Wired (3.5mm)**.
-
-Bluetooth switches off entirely in wired mode (saves battery). Switch back the same way.
-
----
-
-## 7. Tips & Limitations
-
-- **Use 44.1 kHz MP3s for Bluetooth.** The BT link runs at a fixed 44.1 kHz; files at 48 kHz or other rates will play slightly fast/slow over Bluetooth (wired output is unaffected). Most music files are already 44.1 kHz.
-- **CBR files show exact durations.** VBR files show an estimate that refines itself during the first seconds of playback.
-- **Volume is remembered**, as are output mode and your paired device.
+- **Use 44.1 kHz MP3s.** The Bluetooth link runs at a fixed 44.1 kHz; files at 48 kHz or other rates will play slightly fast/slow. Most music files are already 44.1 kHz.
+- **Song length shows "0:00" for the first second or two of a track**, then settles on a number and stays there. It's estimated from how much of the compressed file has been read so far (not read from the file's tags), computed once early in the track and held fixed afterward rather than continuously refined.
+- **Volume is remembered**, as is your paired device.
 - **Album art without the tool:** songs without an `.art` file show a gold record label instead — everything else works normally.
+- **Library is capped at 15 songs at a time** (per playlist) — put more music in folders and use the Playlists screen to switch between sets rather than expecting one giant list.
 
 ---
 
-## 8. Charging & Power
+## 7. Charging & Power
 
 - Charge via the **USB-C** port (TP4056, ~1A). Charging works while powered off.
 - The **slide switch** hard-disconnects the battery — use it for storage or transport.
@@ -128,18 +119,18 @@ Bluetooth switches off entirely in wired mode (saves battery). Switch back the s
 
 ---
 
-## 9. Troubleshooting
+## 8. Troubleshooting
 
 | Symptom | Likely cause / fix |
 |---|---|
 | **"No SD card!" on boot / empty Library** | Card not FAT32, not inserted fully, or inserted after boot. Power-cycle with the card in. |
-| **Board won't boot at all with SD module wired** | If your SD module has a pull-up wired to GPIO 12 — it must not be connected there. See PRD pin rules. |
+| **Board won't boot at all with SD module wired** | If your SD module has a pull-up wired to GPIO 12, it must not be connected there. See the wiring notes in the [README](../README.md#wiring) (`firmware/src/config.h` is the authoritative pin source). |
 | **My earbuds never appear in the list** | Make sure they're in *pairing* mode (not just on), and close to the player. Some devices only advertise for ~60s — re-enter pairing mode. |
 | **Connected, but no sound** | Check a song is actually playing (Now Playing shows the spinning record) and volume isn't at 0. |
-| **Music sounds too fast/slow on Bluetooth** | The file isn't 44.1 kHz. Re-encode it, or use wired output. |
+| **Music sounds too fast/slow** | The file isn't 44.1 kHz — re-encode it to 44.1 kHz. |
 | **Songs play but art shows a plain gold label** | No `.art` file next to the MP3, or the art file is larger than 240×240 / corrupt. Re-run the pre-scaler tool (`--force` to regenerate); check the serial log for the exact reason. |
-| **Playback "frozen" in BT mode** | No sink connected — playback holds until your earbuds connect (or switch to Wired in Settings). |
-| **Wrong/garbled colors on screen** | SPI wiring issue on the display (check MOSI/SCK/DC), or a firmware build older than July 2026. |
+| **Playback "frozen"** | No Bluetooth sink connected — playback holds until your earbuds connect. |
+| **Wrong/garbled colors on screen** | SPI wiring issue on the display (check MOSI/SCLK/DC against `config.h`), or drop `SPI_FREQUENCY` from 40MHz to 27MHz — both display and SD are GPIO-matrix routed on this board, which makes 40MHz more marginal than an IOMUX-native pin would be. |
 | **Volume knob scrolls instead of changing volume** | You're on a menu screen — volume control is on Now Playing only. |
 
 Still stuck? Connect USB and open a serial monitor at **115200 baud** — the firmware logs every boot step (`[SD]`, `[BT]`, `[Audio]`, `[UI]`) and most failures are named explicitly there.

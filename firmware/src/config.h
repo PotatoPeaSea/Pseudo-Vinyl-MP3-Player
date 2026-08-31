@@ -115,7 +115,10 @@
 #define ART_MAX_BYTES       (ART_MAX_SIDE * ART_MAX_SIDE * 2)
 
 // ── UI Constants ────────────────────────────────────────────
-#define VINYL_SPIN_SPEED_DEG 2       // Degrees per frame
+#define VINYL_SPIN_SPEED_DEG 1       // Degrees per frame — was 2 (120°/s);
+                                      // halved because the bigger per-frame
+                                      // jump looked jittery even at a
+                                      // confirmed 60Hz redraw (LV_DISP_DEF_REFR_PERIOD)
 #define UI_REFRESH_MS        16      // ~60fps LVGL tick
 #define INPUT_POLL_MS        5       // Button/encoder poll interval
 #define DEBOUNCE_MS          50      // Button debounce

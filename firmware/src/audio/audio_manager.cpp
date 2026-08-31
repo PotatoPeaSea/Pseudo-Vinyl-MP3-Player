@@ -44,6 +44,9 @@ static audio_tools::EncodedAudioStream decoder(&meter, &helix);
 static audio_tools::StreamCopy copier;
 static File curFile;
 static size_t curFileSize = 0;
+// Size of an ID3v2 tag at the front of curFile, 0 if none. Needed to correct
+// the duration estimate in durationSec() — see the comment there.
+static size_t id3TagSize = 0;
 
 static Preferences audioPrefs;
 
@@ -175,6 +178,27 @@ static void doPlay(int index) {
     }
     curFileSize = curFile.size();
     meter.bytes = 0;
+
+    // Detect an ID3v2 tag at the front of the file so durationSec() can
+    // exclude it from the bytes-consumed-vs-filesize ratio. Tags carrying
+    // embedded album art (common on MP3s that haven't been stripped, even
+    // though this project's own prescale_art tool writes a separate .art
+    // file rather than touching the source MP3) can run tens to hundreds of
+    // KB — big enough to systematically skew the ratio no matter how the
+    // sampling/smoothing around it is tuned, which is why duration was
+    // still wrong after fixing the update-cadence bug (docs/HANDOFF.md
+    // item 3). ID3v2 header: "ID3" + 2 version bytes + 1 flags byte + 4
+    // syncsafe size bytes (7 bits each, MSB always 0) = 10 bytes, covering
+    // everything after the header up to (but not including) the audio
+    // frames. A footer flag (flags bit 0x10) adds another 10-byte footer.
+    id3TagSize = 0;
+    uint8_t hdr[10];
+    if (curFile.read(hdr, 10) == 10 && hdr[0] == 'I' && hdr[1] == 'D' && hdr[2] == '3') {
+        uint32_t tagBody = ((uint32_t)(hdr[6] & 0x7f) << 21) | ((uint32_t)(hdr[7] & 0x7f) << 14) |
+                            ((uint32_t)(hdr[8] & 0x7f) << 7)  |  (uint32_t)(hdr[9] & 0x7f);
+        id3TagSize = 10 + tagBody + ((hdr[5] & 0x10) ? 10 : 0);
+    }
+    curFile.seek(0);   // rewind — the decode pipeline must see the tag too (it skips it internally)
 
     // Per-track begin() resets the helix parser. NOTE: on an active decoder
     // this is a free+realloc of the ~25KB buffers (CommonHelix::begin calls
@@ -372,11 +396,65 @@ uint32_t AudioMgr::positionSec() {
     return meter.bytes / byteRate;
 }
 
+// How often durationSec() takes a fresh sample, vs. every UI frame (60Hz).
+// The ID3-corrected ratio below is accurate per-sample now, so this isn't
+// about hiding noise — it's just that nothing benefits from recomputing
+// faster than the file actually accumulates new data worth averaging over,
+// and re-sampling too often is what caused the visible flicker in earlier
+// attempts (docs/HANDOFF.md item 3).
+#define DURATION_RESAMPLE_MS 5000
+
+// Duration estimate: (decoded seconds so far) * audioBytesTotal / (compressed
+// audio bytes consumed so far) — no ID3 TLEN / Xing frame-count parsing, so
+// this can't be exact from a single read; it's an extrapolation that keeps
+// re-sampling at DURATION_RESAMPLE_MS, refining slightly as more of the file
+// is read (matters most for genuinely variable-bitrate files). Only called
+// from the UI task (main.cpp's uiTask), so the static state needs no
+// cross-task protection.
+//
+// "Audio bytes" deliberately excludes the ID3v2 tag (id3TagSize, measured
+// in doPlay()): curFile.position() counts every byte physically read from
+// the file, including the tag, but positionSec() only counts decoded audio
+// — helix silently skips the tag via its frame sync without reporting how
+// much it skipped. A tag with embedded album art can be tens to hundreds of
+// KB, which inflates "bytes consumed" relative to actual decoded audio and
+// systematically skews the ratio toward too-short — this was the actual
+// cause of a wrong (not just unstable) duration, found after fixing the
+// update-cadence bug still left the number wrong (docs/HANDOFF.md item 3).
 uint32_t AudioMgr::durationSec() {
-    // Scale elapsed time by compressed bytes consumed vs. file size —
-    // exact for CBR, converges quickly for VBR
-    if (!curFile || curFileSize == 0) return 0;
+    static int lastIdx = -2;
+    static uint32_t lastEstimate = 0;
+    static uint32_t lastSampleMs = 0;
+
+    if (!curFile || curFileSize == 0) {
+        lastIdx = -2;   // force a fresh reset whenever a track next starts
+        return 0;
+    }
+    if (currentIdx != lastIdx) {
+        lastIdx = currentIdx;
+        lastEstimate = 0;
+        lastSampleMs = 0;   // new track — resample immediately
+    }
+
+    uint32_t now = millis();
+    if (lastEstimate > 0 && now - lastSampleMs < DURATION_RESAMPLE_MS) {
+        return lastEstimate;   // too soon — hold the last sample
+    }
+
     size_t consumed = curFile.position();
-    if (consumed == 0) return 0;
-    return (uint64_t)positionSec() * curFileSize / consumed;
+    uint32_t posSec = positionSec();
+    if (consumed <= id3TagSize) return lastEstimate;   // still inside the tag — no real audio consumed yet
+    size_t audioConsumed = consumed - id3TagSize;
+    size_t audioTotal = (curFileSize > id3TagSize) ? (curFileSize - id3TagSize) : curFileSize;
+
+    // Wait for a reasonably large sample of actual AUDIO bytes before the
+    // first estimate — early samples off a tiny fraction of the file are
+    // the least reliable.
+    if (audioConsumed < 65536 || posSec < 2) {
+        return lastEstimate;   // not ready yet — UI shows "0:00 / 0:00" briefly at track start
+    }
+
+    lastSampleMs = now;
+    lastEstimate = (uint32_t)((float)posSec * audioTotal / audioConsumed);
+    return lastEstimate;
 }

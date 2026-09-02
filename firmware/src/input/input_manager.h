@@ -35,4 +35,9 @@ namespace Input {
 
     /// Inject a synthetic event (used by the debug serial console)
     void inject(InputEvent evt);
+
+    /// Milliseconds since the last button/encoder activity (real or
+    /// injected). Used by the UI task to drive display sleep — cheap
+    /// enough to poll every frame, no event consumption involved.
+    unsigned long msSinceActivity();
 }

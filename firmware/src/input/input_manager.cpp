@@ -7,7 +7,14 @@ static volatile InputEvent eventQueue[EVENT_QUEUE_SIZE];
 static volatile uint8_t qHead = 0;
 static volatile uint8_t qTail = 0;
 
+// Last real or injected activity — read cross-task (uiTask) without a lock,
+// same pattern as the volatile flags in bt_manager.cpp; a torn read of a
+// millis() value just means the idle timer is off by at most one poll
+// interval, which doesn't matter here.
+static volatile unsigned long lastActivityMs = 0;
+
 static void pushEvent(InputEvent evt) {
+    lastActivityMs = millis();
     uint8_t next = (qHead + 1) % EVENT_QUEUE_SIZE;
     if (next != qTail) {    // Don't overflow
         eventQueue[qHead] = evt;
@@ -57,6 +64,8 @@ static void IRAM_ATTR encISR() {
 // ── Public API ──────────────────────────────────────────────
 
 void Input::init() {
+    lastActivityMs = millis();   // idle timer starts counting from boot
+
     // Buttons (active LOW with internal pull-up)
     for (int i = 0; i < NUM_BUTTONS; i++) {
         pinMode(buttons[i].pin, INPUT_PULLUP);
@@ -120,4 +129,8 @@ bool Input::hasEvent() {
 
 void Input::inject(InputEvent evt) {
     pushEvent(evt);
+}
+
+unsigned long Input::msSinceActivity() {
+    return millis() - lastActivityMs;
 }

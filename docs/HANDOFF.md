@@ -262,3 +262,37 @@ Four changes, none visually or electrically confirmed on the panel/board yet
   without reintroducing the exact watchdog-spin failure mode already
   documented for this decoder (`AudioMgr::init()`'s comment,
   `doPlay()`'s).
+
+---
+
+## 5. Display sleep on idle — implemented, builds clean, NOT hardware-verified
+
+`Display::sleep()`/`wake()` (`firmware/src/display/display_manager.cpp`)
+send the GC9A01's `DISPOFF`+`SLPIN` / `SLPOUT`+`DISPON` command sequence
+over SPI to put the panel driver into low-power mode. Driven from
+`uiTask` (`main.cpp`) off a new idle timer: `Input::msSinceActivity()`
+(`input_manager.cpp`, timestamped on every real/injected button or encoder
+event) compared against `DISPLAY_IDLE_SLEEP_MS` (30s, `config.h`). Sleeps
+regardless of playback state — audio keeps streaming over Bluetooth with
+the panel asleep. `UI::update()`/`Display::update()` (vinyl-spin math +
+LVGL flush) are skipped entirely while asleep to avoid burning CPU/SPI on
+an invisible screen.
+
+**Known limitation, not a bug:** this module's backlight is hardwired to
+3.3V on-board with no GPIO in the loop (`Display::setBacklight()` has
+always been a no-op — see item 4 above). Sleep therefore stops the panel
+driver but the backlight stays lit — expect a dim/blank glow, not a
+visually black screen, until/unless the backlight is rewired through a
+GPIO-driven MOSFET (discussed with the user, not yet done — see the wiring
+notes below for what's needed if that mod happens).
+
+**UX tradeoff, not yet reconsidered:** the button press that wakes the
+panel also performs its normal action (e.g. pressing Next while asleep
+both wakes the screen and skips a track) — it is not swallowed as a
+wake-only tap. Revisit if that proves annoying on hardware.
+
+**Nothing here has been flashed/observed yet** — verify next: that
+`SLPIN`/`SLPOUT` actually work on this specific GC9A01 module (some clones
+ignore or mishandle sleep commands), that waking doesn't leave visible
+garbage before the next full-screen redraw, and that the 30s timeout feels
+right in practice.

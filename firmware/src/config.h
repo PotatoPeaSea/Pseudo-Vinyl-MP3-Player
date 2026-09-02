@@ -149,3 +149,14 @@
                                       // smooth on hardware.
 #define INPUT_POLL_MS        5       // Button/encoder poll interval
 #define DEBOUNCE_MS          50      // Button debounce
+
+// Panel driver sleeps (Display::sleep(), GC9A01 SLPIN+DISPOFF) after this
+// long with no button/encoder activity, regardless of playback state —
+// music keeps streaming over Bluetooth with the panel asleep. Wakes on the
+// next button/encoder press (that press still performs its normal action
+// too — e.g. pressing Next while asleep both wakes the screen and skips a
+// track; not swallowed, see main.cpp uiTask). NOTE: the backlight is
+// hardwired with no control pin (config.h display block above) and stays
+// lit through sleep — this saves panel-driver/SPI power, not a visually
+// black screen. See docs/HANDOFF.md.
+#define DISPLAY_IDLE_SLEEP_MS (30 * 1000)

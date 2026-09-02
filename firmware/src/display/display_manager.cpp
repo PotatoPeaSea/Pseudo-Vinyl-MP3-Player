@@ -33,6 +33,7 @@ static TFT_eSPI tft = TFT_eSPI(DISPLAY_WIDTH, DISPLAY_HEIGHT);
 static lv_disp_draw_buf_t draw_buf;
 static lv_color_t *buf1 = nullptr;
 static lv_disp_drv_t disp_drv;
+static bool asleep = false;
 
 // ── LVGL flush callback ─────────────────────────────────────
 static void disp_flush_cb(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t *color_p) {
@@ -94,10 +95,37 @@ void Display::init() {
 }
 
 void Display::update() {
+    if (asleep) return;   // no panel to flush to — see sleep()
     lv_timer_handler();
 }
 
 void Display::setBacklight(uint8_t brightness) {
     // No backlight control pin on this display module — no-op.
     (void)brightness;
+}
+
+void Display::sleep() {
+    if (asleep) return;
+    // DISPOFF first (blanks output), then SLPIN (panel low-power mode —
+    // stops most internal driver circuits). Order matches the GC9A01
+    // datasheet's power-down sequence.
+    tft.writecommand(TFT_DISPOFF);
+    tft.writecommand(TFT_SLPIN);
+    asleep = true;
+    Serial.println("[Display] Sleeping (panel driver only — backlight has "
+                    "no control pin and stays lit, see config.h)");
+}
+
+void Display::wake() {
+    if (!asleep) return;
+    tft.writecommand(TFT_SLPOUT);
+    delay(120);   // datasheet-mandated settle time after SLPOUT before
+                  // further commands are guaranteed to take effect
+    tft.writecommand(TFT_DISPON);
+    asleep = false;
+    Serial.println("[Display] Woke");
+}
+
+bool Display::isAsleep() {
+    return asleep;
 }

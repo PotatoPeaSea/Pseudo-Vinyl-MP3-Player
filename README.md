@@ -50,19 +50,18 @@ A portable, battery-powered MP3 player built on the **ESP32-WROVER N4R8** that s
 
 | Peripheral | Pins |
 |---|---|
-| Display | MOSI 0, SCLK 5, CS 2, DC 23, RST 15 |
-| SD card (HSPI) | SCLK 21, MOSI 18, MISO 22, CS 19 |
-| Encoder | CLK 32, DT 33, SW 27 |
-| Buttons | Play 13, Next 14, Prev 4 |
+| Display | MOSI 23, SCLK 19, CS 22, DC 21, RST 27 |
+| SD card (SDMMC, 1-bit) | CLK 14, CMD 15, D0 2 |
+| Encoder | CLK 32, DT 33, SW 5 |
+| Buttons | Play 13, Next 18, Prev 4 |
 | Battery sense | GPIO 34 (ADC1) |
 
 Wiring rules worth knowing (all enforced by this pin map):
 
-1. **GPIO 16/17 are reserved for PSRAM** (CS/CLK) on the WROVER and can't be used for anything else — this is why display/SD moved off their original WROOM-32 pins.
-2. **GPIO 0 is the boot-mode strapping pin**, now carrying display MOSI. It must read HIGH at reset or the board drops into serial download instead of booting; safe as an SPI output once running, but the first suspect if boots become unreliable (add a 10k pull-up to 3V3, or move MOSI to GPIO 25/26).
-3. **GPIO 12 is deliberately unused.** Many SD modules have pull-ups on every line; a pull-up on GPIO 12 at boot selects 1.8V flash voltage and the board won't boot.
-4. **Battery sense must be on ADC1** (GPIO 32–39). ADC2 is unusable while Bluetooth is running.
-5. **Display and SD are on separate hardware SPI buses**, so display refresh never blocks audio streaming from the card. Both are now GPIO-matrix routed (no IOMUX-native pins were free after the PSRAM/strapping constraints above) — if the panel tears or shows garbage, drop `SPI_FREQUENCY` from 40MHz to 27MHz before suspecting anything else.
+1. **GPIO 16/17 are reserved for PSRAM** (CS/CLK) on the WROVER and can't be used for anything else.
+2. **SD card uses the SDMMC peripheral, not SPI.** On classic ESP32 its CLK/CMD/D0 pins are fixed in the IOMUX (not GPIO-matrix routable), so 14/15/2 aren't a preference — they're the only usable values in 1-bit mode. This also means GPIO 12 (SDMMC's D2 in 4-bit mode) is untouched: nothing drives it, so its old boot-strap risk (a pull-up there selects 1.8V flash voltage and bricks the board) no longer applies.
+3. **Battery sense must be on ADC1** (GPIO 32–39). ADC2 is unusable while Bluetooth is running.
+4. **Display is on its own SPI bus**, GPIO-matrix routed (no IOMUX-native pins were free) — if the panel tears or shows garbage, drop `SPI_FREQUENCY` from 40MHz to 27MHz before suspecting anything else. It no longer shares a bus with SD (SD is now SDMMC, a separate peripheral entirely), so display refresh never contends with audio streaming from the card.
 
 ---
 

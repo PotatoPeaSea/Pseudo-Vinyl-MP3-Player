@@ -24,7 +24,7 @@ struct PlaylistInfo {
 };
 
 namespace Storage {
-    /// Initialize SD card on HSPI
+    /// Initialize SD card on the SDMMC peripheral (1-bit mode)
     bool init();
 
     /// Check if SD card is mounted

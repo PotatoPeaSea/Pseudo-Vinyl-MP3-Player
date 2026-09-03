@@ -296,3 +296,54 @@ wake-only tap. Revisit if that proves annoying on hardware.
 ignore or mishandle sleep commands), that waking doesn't leave visible
 garbage before the next full-screen redraw, and that the 30s timeout feels
 right in practice.
+
+---
+
+## 6. Full pin rewiring — display + SD moved, SD now SDMMC not SPI — NOT hardware-verified
+
+User-directed rewiring, done live over chat pin-by-pin (including one
+mid-message correction to the display RST pin) — nothing here has been
+soldered or flashed yet. Builds clean on both `esp32dev` and
+`esp32dev-debug`.
+
+**Display** (`firmware/src/config.h`, `firmware/platformio.ini` TFT_eSPI
+flags — kept in sync, both updated): MOSI 0→23, SCLK 5→19, CS 2→22,
+DC 23→21, RST 15→27. Still GPIO-matrix routed, still no strapping-pin
+exposure (none of the new five are boot-strap pins — the old GPIO 0/MOSI
+strapping caution no longer applies and was removed from the comments).
+
+**SD card**: switched from SPI (`SD.h`, HSPI, pins 21/18/22/19) to the
+ESP32's dedicated SDMMC peripheral in 1-bit mode (`SD_MMC.h`), pins
+CLK=14, CMD=15, D0=2 — per the user's Freenove WROVER board reference
+(`Sketch_03.1_SDMMC_Test.ino`). This is not a pin *preference*: on classic
+ESP32 the SDMMC peripheral's pins are fixed in the IOMUX and not
+GPIO-matrix routable, so 14/15/2 are the only values that work in 1-bit
+mode — `SD_MMC.begin()` uses them as the hardware default, no `setPins()`
+call needed (that API only does anything on GPIO-matrix-capable chips like
+S3, per the framework header). Touched files:
+`firmware/src/storage/sd_manager.cpp` (mount + every `SD.`→`SD_MMC.` call)
+and `firmware/src/audio/audio_manager.cpp` (`doPlay()`'s file open). The
+`File`/`fs::FS` API surface is identical between the two libraries, so no
+other call sites needed changes.
+
+**Two pin collisions surfaced by the SD/display move, resolved by moving
+the conflicting peripheral, not the new SD/display pins** (both in
+`config.h`):
+- New display RST (27) collided with the existing `PIN_ENC_SW`. Moved the
+  encoder switch to GPIO 5 (freed when display SCLK moved off it).
+- New SD CLK (14) collided with the existing `PIN_BTN_NEXT`. Moved the
+  Next button to GPIO 18 (freed when SD MOSI moved off it, no longer used
+  now that SD is SDMMC not SPI).
+
+**Side effect worth knowing:** GPIO 12's old strapping caution (a pull-up
+there at boot selects the wrong flash voltage) is now moot — 1-bit SDMMC
+mode never drives D1/D2/D3 (GPIO 4/12/13), so nothing touches GPIO 12 at
+all anymore. Left the pin unused anyway (no reason to reclaim it).
+
+**Verify next, in order:** that `SD_MMC.begin()` actually mounts the card
+on real hardware (never tested — the SPI path was the only one ever
+flashed), that the display initializes correctly on its new SPI pins
+(GC9A01 init sequence itself is unchanged, only which GPIOs drive it), and
+that the two reassigned controls (encoder press, Next button) still
+register — same debounce/poll code, new pins, should be transparent, but
+unverified.

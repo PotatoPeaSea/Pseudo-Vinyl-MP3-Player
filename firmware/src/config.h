@@ -6,13 +6,17 @@
  * Pin rules for this module:
  *  - GPIO 6-11 are flash — never use
  *  - GPIO 16/17 are the PSRAM CS/CLK lines on WROVER — never use.
- *    (This is why the display SCLK and SD MOSI moved off them.)
  *  - GPIO 12 (MTDI) strapping: a pull-up at boot bricks flash voltage —
- *    left unused because many SD modules have pull-ups on all lines
+ *    left unused. No longer at risk from the SD card either: SD moved to
+ *    the SDMMC peripheral's 1-bit mode (below), which doesn't touch it.
  *  - GPIO 34/35/36/39 are INPUT-ONLY, no internal pull-ups
  *  - ADC2 pins can't do analogRead while Bluetooth is on → battery on ADC1
- *  - Strapping pins in use: 0 (TFT MOSI), 2 (TFT CS), 5 (TFT SCLK),
- *    15 (TFT RST) — see the display block for the boot-time caveat
+ *  - SD card uses the SDMMC peripheral, not SPI — on classic ESP32 its
+ *    CLK/CMD/D0-D3 pins are fixed in the IOMUX (not GPIO-matrix routable,
+ *    unlike the display's SPI pins below), so GPIO 14/15/2 aren't a free
+ *    choice — see the SD Card block.
+ *  - GPIO 0 is now unused by this design (it was the display's MOSI pin in
+ *    an earlier revision — a boot-strapping pin, moved off deliberately).
  */
 
 // ── Feature Flags ───────────────────────────────────────────
@@ -30,27 +34,31 @@
 // NOTE: pins are duplicated in platformio.ini TFT_eSPI build flags —
 // keep both in sync!
 //
-// CAUTION — GPIO 0 (SDA/MOSI) is the boot-mode strapping pin. It must read
-// HIGH at reset or the chip drops into serial download instead of running
-// the app. It is safe as an SPI output once booted, but if the panel's SDA
-// line has a pull-down (or the module drives it low at reset) the board
-// will not boot. If boots become unreliable, this pin is the first suspect:
-// add a 10k pull-up to 3V3 on GPIO 0, or move SDA to GPIO 25/26.
+// Routed through the GPIO matrix (none of these are VSPI/HSPI IOMUX-native
+// pins), same as before — see platformio.ini's SPI_FREQUENCY note if the
+// panel tears or shows garbage. No strapping-pin caution needed on this
+// revision: none of MOSI/SCLK/CS/DC/RST below are boot-strap pins.
 #define DISPLAY_WIDTH       240
 #define DISPLAY_HEIGHT      240
-#define PIN_TFT_MOSI        0       // SDA — strapping pin, see caution above
-#define PIN_TFT_SCLK        5       // SCL
-#define PIN_TFT_CS          2
-#define PIN_TFT_DC          23
-#define PIN_TFT_RST         15
+#define PIN_TFT_MOSI        23      // SDA
+#define PIN_TFT_SCLK        19      // SCL
+#define PIN_TFT_CS          22
+#define PIN_TFT_DC          21
+#define PIN_TFT_RST         27
 // Display module has no backlight pin (BL hardwired on-board); brightness
 // control is unavailable.
 
-// ── SD Card (HSPI) ──────────────────────────────────────────
-#define PIN_SD_SCLK         21
-#define PIN_SD_MOSI         18
-#define PIN_SD_MISO         22
-#define PIN_SD_CS           19
+// ── SD Card (SDMMC peripheral, 1-bit mode) ──────────────────
+// Moved off SPI/HSPI to the ESP32's dedicated SDMMC peripheral (see
+// sd_manager.cpp — SD_MMC library, not SD/SPI). On classic ESP32 the
+// SDMMC pins are fixed in the IOMUX and NOT GPIO-matrix routable, so
+// these three are the only usable values, not a preference:
+#define PIN_SD_CLK          14
+#define PIN_SD_CMD          15
+#define PIN_SD_D0           2
+// 1-bit mode only uses the three pins above — D1/D2/D3 (GPIO 4/12/13 on
+// this SoC) stay fully free for other use. In particular this is why
+// GPIO 12's old strapping caution no longer applies: nothing drives it.
 
 // ── Audio: Bluetooth A2DP only ──────────────────────────────
 // Wired I2S/PCM5102 output was removed back on the no-PSRAM WROOM-32: the
@@ -62,13 +70,14 @@
 // ── Rotary Encoder (KY-040) ─────────────────────────────────
 #define PIN_ENC_A           32
 #define PIN_ENC_B           33
-#define PIN_ENC_SW          27
+#define PIN_ENC_SW          5       // moved off 27 — now TFT RST
+                                    // (GPIO 5 freed when TFT SCLK moved to 19)
 
 // ── Buttons ─────────────────────────────────────────────────
 #define PIN_BTN_PLAY        13
-#define PIN_BTN_NEXT        14
-#define PIN_BTN_PREV        4       // moved off 23 (now TFT DC); 4 was freed
-                                    // when TFT MOSI moved to GPIO 0
+#define PIN_BTN_NEXT        18      // moved off 14 — now SD CLK (SDMMC)
+                                    // (GPIO 18 freed when SD moved off SPI)
+#define PIN_BTN_PREV        4
 
 // ── Battery voltage divider (ADC1_CH6 — usable with BT on) ──
 #define PIN_BATT_ADC        34

@@ -1,26 +1,26 @@
 #include "sd_manager.h"
 #include "../config.h"
-#include <SPI.h>
-#include <SD.h>
+#include <SD_MMC.h>
 #include <esp_heap_caps.h>  // heap_caps_get_largest_free_block (PSRAM headroom check)
 
-static SPIClass sdSPI(HSPI);
 static bool mounted = false;
 
 // ── Public API ──────────────────────────────────────────────
 
 bool Storage::init() {
-    sdSPI.begin(PIN_SD_SCLK, PIN_SD_MISO, PIN_SD_MOSI, PIN_SD_CS);
-
-    // 20 MHz — MISO is routed through the GPIO matrix (pin 35), keep margin
-    if (!SD.begin(PIN_SD_CS, sdSPI, 20000000)) {
+    // 1-bit SDMMC, not SPI — see config.h's SD Card block for why
+    // PIN_SD_CLK/CMD/D0 aren't passed here: on classic ESP32 the SDMMC
+    // peripheral's pins are fixed in the IOMUX (14/15/2), setPins() is a
+    // GPIO-matrix-only API this chip doesn't support, so begin() just uses
+    // the hardware default, which already matches those constants.
+    if (!SD_MMC.begin("/sdcard", /*mode1bit=*/true)) {
         Serial.println("[SD] Mount FAILED");
         mounted = false;
         return false;
     }
 
-    uint64_t totalBytes = SD.totalBytes() / (1024 * 1024);
-    uint64_t usedBytes = SD.usedBytes() / (1024 * 1024);
+    uint64_t totalBytes = SD_MMC.totalBytes() / (1024 * 1024);
+    uint64_t usedBytes = SD_MMC.usedBytes() / (1024 * 1024);
     Serial.printf("[SD] Mounted — %llu MB used / %llu MB total\n", usedBytes, totalBytes);
     mounted = true;
     return true;
@@ -53,7 +53,7 @@ static void scanDir(File dir, std::vector<SongInfo> &songs) {
 
                     // Check for .art file
                     String artPath = info.filepath.substring(0, info.filepath.length() - 4) + ".art";
-                    info.hasArt = SD.exists(artPath);
+                    info.hasArt = SD_MMC.exists(artPath);
 
                     songs.push_back(info);
                 }
@@ -66,7 +66,7 @@ static void scanDir(File dir, std::vector<SongInfo> &songs) {
 std::vector<SongInfo> Storage::scanMusic(const char *rootPath) {
     std::vector<SongInfo> songs;
 
-    File root = SD.open(rootPath);
+    File root = SD_MMC.open(rootPath);
     if (!root || !root.isDirectory()) {
         Serial.println("[SD] Failed to open root directory");
         return songs;
@@ -105,7 +105,7 @@ std::vector<PlaylistInfo> Storage::scanPlaylists(const char *rootPath) {
     all.path = rootPath;
     lists.push_back(all);
 
-    File root = SD.open(rootPath);
+    File root = SD_MMC.open(rootPath);
     if (!root || !root.isDirectory()) {
         Serial.println("[SD] scanPlaylists: failed to open root directory");
         return lists;
@@ -140,7 +140,7 @@ std::vector<PlaylistInfo> Storage::scanPlaylists(const char *rootPath) {
 uint8_t* Storage::loadArtFile(const String &mp3Path, size_t &outSize) {
     String artPath = mp3Path.substring(0, mp3Path.length() - 4) + ".art";
 
-    File f = SD.open(artPath, FILE_READ);
+    File f = SD_MMC.open(artPath, FILE_READ);
     if (!f) {
         Serial.printf("[SD] No art file at %s\n", artPath.c_str());
         outSize = 0;

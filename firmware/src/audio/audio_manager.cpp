@@ -1,8 +1,7 @@
 #include "audio_manager.h"
 #include "../config.h"
 #include "../bluetooth/bt_manager.h"
-#include <SPI.h>
-#include <SD.h>
+#include <SD_MMC.h>
 #include <Preferences.h>
 #include "AudioTools.h"
 #include "AudioTools/AudioCodecs/CodecMP3Helix.h"
@@ -178,7 +177,7 @@ static void doPlay(int index) {
     currentIdx = index;
     const SongInfo &song = (*playlist)[currentIdx];
 
-    curFile = SD.open(song.filepath.c_str(), FILE_READ);
+    curFile = SD_MMC.open(song.filepath.c_str(), FILE_READ);
     if (!curFile) {
         Serial.printf("[Audio] FAILED to open: %s\n", song.filepath.c_str());
         return;

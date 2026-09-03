@@ -201,11 +201,18 @@ computation itself* is off — check next, in order of likelihood:
 
 ---
 
-## 4. Power-efficiency pass — implemented, flashed, builds clean, NOT hardware-verified
+## 4. Power-efficiency pass — flashed and running; no crashes, no power measurement yet
 
-Four changes, none visually or electrically confirmed on the panel/board yet
-(no USB power meter used). Builds clean on both `esp32dev` and
-`esp32dev-debug`. In rough order of risk:
+Four changes. Flashed to the COM3 board 2026-09-02 and left running through
+boot, SD mount, BT discovery, and simulated playback/navigation (see item 6
+below for the full session) with no crash, no watchdog reset, no `[BT]
+underrun`/`ringbuf send timeout` messages — so at minimum the 160MHz clock
+and 8KB SD chunk aren't breaking anything outright. Still NOT confirmed:
+no USB power meter used, so the actual power savings are unmeasured, and
+no real BT sink was connected during this session (target speaker wasn't
+in range) so audio-under-160MHz-load specifically hasn't been exercised —
+only silent/held playback (see item 6). Builds clean on both `esp32dev`
+and `esp32dev-debug`. In rough order of risk:
 
 1. **Halved the LVGL redraw rate** (`firmware/src/lv_conf.h`
    `LV_DISP_DEF_REFR_PERIOD` 16→32ms, `firmware/src/config.h`
@@ -265,7 +272,7 @@ Four changes, none visually or electrically confirmed on the panel/board yet
 
 ---
 
-## 5. Display sleep on idle — implemented, builds clean, NOT hardware-verified
+## 5. Display sleep on idle — flashed 2026-09-02, sleep+wake confirmed working
 
 `Display::sleep()`/`wake()` (`firmware/src/display/display_manager.cpp`)
 send the GC9A01's `DISPOFF`+`SLPIN` / `SLPOUT`+`DISPON` command sequence
@@ -291,20 +298,61 @@ panel also performs its normal action (e.g. pressing Next while asleep
 both wakes the screen and skips a track) — it is not swallowed as a
 wake-only tap. Revisit if that proves annoying on hardware.
 
-**Nothing here has been flashed/observed yet** — verify next: that
-`SLPIN`/`SLPOUT` actually work on this specific GC9A01 module (some clones
-ignore or mishandle sleep commands), that waking doesn't leave visible
-garbage before the next full-screen redraw, and that the 30s timeout feels
-right in practice.
+**Confirmed on hardware (COM3 board, 2026-09-02):** after 30s with no
+serial input, log showed `[Display] Sleeping (panel driver only...)` right
+on schedule, board kept running normally afterward (BT discovery continued
+uninterrupted, no crash/reset). Sending an injected input afterward
+produced `[Display] Woke` immediately, also with no crash. `SLPIN`/`SLPOUT`
+work on this GC9A01 module and don't hang the SPI bus either direction.
+
+**Still not verified:** whether waking leaves visible garbage before the
+next full-screen redraw (needs eyes on the panel — this session only had
+serial access, no camera), whether 30s feels right in practice, and the
+backlight-stays-lit limitation above is unconfirmed by eye (expected from
+the hardware docs, not yet actually looked at).
 
 ---
 
-## 6. Full pin rewiring — display + SD moved, SD now SDMMC not SPI — NOT hardware-verified
+## 6. Full pin rewiring — display + SD moved, SD now SDMMC not SPI — flashed and mounting
 
 User-directed rewiring, done live over chat pin-by-pin (including one
-mid-message correction to the display RST pin) — nothing here has been
-soldered or flashed yet. Builds clean on both `esp32dev` and
-`esp32dev-debug`.
+mid-message correction to the display RST pin). Flashed to the COM3 board
+2026-09-02 (`pio run -t upload --upload-port COM3`) and boot-tested over
+serial — **the actual hardware this was wired for has not been confirmed
+to physically match `config.h` yet** (this session flashed whatever board
+was on COM3; if that's not the freshly-rewired board, none of the
+confirmations below mean anything — verify it's the right board first).
+Builds clean on both `esp32dev` and `esp32dev-debug`.
+
+**Confirmed from the boot log on COM3:**
+- `[SD] Mounted — 187 MB used / 7645 MB total`, `[SD] Found 3 playlist(s)`,
+  `[SD] Loaded 15 MP3 files` — `SD_MMC.begin()` on the fixed IOMUX pins
+  (14/15/2) mounted successfully and read the existing card correctly.
+- `[Display] TFT + LVGL initialized`, `[UI] Screen 1 shown` — the GC9A01
+  initializes on its new SPI pins (23/19/22/21/27) without error.
+- `[PSRAM] ok: size=4192107 ...`, heap figures in the expected range
+  through boot, storage mount, and BT init — no allocation failures.
+- Debug-console-injected input (`cw`/`ccw`/`next`/`prev`/`press`/`play`)
+  exercised the full event path — track change, screen navigation
+  (Playlists→Song List), `.art` file load (90×90, 16200 bytes) — cleanly,
+  repeatedly, no crash or heap regression across the sequence.
+- Ran for several minutes total (BT continuously discovering, since the
+  saved target speaker wasn't in range) with no watchdog reset, no crash,
+  no `[BT] underrun`/`ringbuf send timeout`.
+
+**NOT confirmed — debug-console injection bypasses the actual GPIO reads:**
+whether the *physical* encoder switch (now GPIO 5) and Next button (now
+GPIO 18) actually respond to a real press — `Input::inject()` pushes
+straight into the event queue, never touching `Input::poll()`'s
+`digitalRead()` calls, so a solder bridge, a swapped wire, or a pin left
+unconnected on the physical rewiring would not show up in this test. **A
+real physical press on every button/the encoder is still needed** before
+trusting the new wiring. Also unconfirmed: actual BT audio to a real
+speaker (none was in range this session — only silent/held playback was
+exercised, per `AudioMgr::loop()`'s no-sink hold path), and anything
+requiring eyes on the panel (colors, orientation, rotation — GC9A01
+`setRotation(0)` is unchanged from before, but was never re-verified
+against the new wiring).
 
 **Display** (`firmware/src/config.h`, `firmware/platformio.ini` TFT_eSPI
 flags — kept in sync, both updated): MOSI 0→23, SCLK 5→19, CS 2→22,

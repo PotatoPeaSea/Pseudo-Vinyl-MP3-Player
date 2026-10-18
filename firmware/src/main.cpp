@@ -140,21 +140,9 @@ void uiTask(void *param) {
             }
         }
 
-        // Panel sleep on idle (see DISPLAY_IDLE_SLEEP_MS, config.h). Waking
-        // is just "activity happened recently" — the press that wakes it
-        // still runs its normal action too (not swallowed).
-        if (!Display::isAsleep() && Input::msSinceActivity() > DISPLAY_IDLE_SLEEP_MS) {
-            Display::sleep();
-        } else if (Display::isAsleep() && Input::msSinceActivity() < DISPLAY_IDLE_SLEEP_MS) {
-            Display::wake();
-        }
-
-        // Spin vinyl + LVGL timers — skipped while asleep: nothing to see,
-        // and it would just burn CPU/SPI writing to a sleeping panel
-        if (!Display::isAsleep()) {
-            UI::update();
-            Display::update();
-        }
+        // Spin vinyl + LVGL timers
+        UI::update();
+        Display::update();
 
         vTaskDelay(pdMS_TO_TICKS(UI_REFRESH_MS));
     }

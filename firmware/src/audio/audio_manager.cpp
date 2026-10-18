@@ -157,15 +157,8 @@ void AudioMgr::init() {
     // task into the watchdog. Playing music is the core function; its RAM
     // is a permanent budget line, not a reclaimable one.
     decoder.begin();
-
-    // Grow the SD read chunk from the library's 1KB default (see
-    // SD_READ_CHUNK_BYTES in config.h). Done here, not at copier's static
-    // construction, so the >4KB allocation happens after psramInit() has
-    // run and lands in PSRAM rather than competing for internal SRAM.
-    copier.resize(SD_READ_CHUNK_BYTES);
-
-    Serial.printf("[Audio] Pipeline initialized, helix resident, SD chunk=%dB (free=%u largest=%u)\n",
-                  SD_READ_CHUNK_BYTES, ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+    Serial.printf("[Audio] Pipeline initialized, helix resident (free=%u largest=%u)\n",
+                  ESP.getFreeHeap(), ESP.getMaxAllocHeap());
 }
 
 // Actually start a track — runs on the audio task only (see doPlay note on

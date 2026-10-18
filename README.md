@@ -6,6 +6,10 @@ A portable, battery-powered MP3 player built on the **ESP32-WROOM-32** that stre
 ![Platform](https://img.shields.io/badge/platform-ESP32--WROOM--32-blue)
 ![Framework](https://img.shields.io/badge/framework-Arduino%20%2B%20PlatformIO-teal)
 
+<p align="center">
+  <img src="docs/images/enclosure-assembled.png" alt="3D render of the Pseudo Vinyl MP3 Player enclosure: dark case, tan lid with a round display window, two gold arrow buttons" width="640">
+</p>
+
 > [!NOTE]
 > **Why the classic ESP32 and not the S3?** The project originally targeted the ESP32-S3, but the S3 only has BLE — **no Bluetooth Classic**, which A2DP audio streaming requires. The original ESP32 is the only chip in the family that can act as an A2DP source. The trade-off is that the WROOM-32 has no PSRAM, which shapes several architecture decisions below.
 
@@ -42,6 +46,21 @@ A portable, battery-powered MP3 player built on the **ESP32-WROOM-32** that stre
 | Encoder | KY-040 rotary encoder | GPIO |
 | Buttons | 3× tactile switches | GPIO |
 | Battery | 3.7V LiPo + TP4056 USB-C charger | — |
+
+### Enclosure and PCB
+
+The enclosure is a three-part 3D print designed in Fusion 360: a case, a lid with a window for the round display, and separate arrow buttons. The source assembly (`.f3z`) and printable STLs are in [`CAD/`](CAD/).
+
+<p align="center">
+  <img src="docs/images/enclosure-exploded.png" alt="Exploded view: buttons, lid and case separated vertically" width="420">
+  <img src="docs/images/enclosure-top.png" alt="Top view: two triangular buttons and a centre hole beside the round display window" width="420">
+</p>
+
+The custom PCB is designed in KiCad 10 ([`MP3PlayerPCB/`](MP3PlayerPCB/)). The schematic covers the MCU module, the GC9A01 display connector, the next/previous buttons and rotary encoder, and TP4056 LiPo charging with charge and standby LEDs. Board layout is in progress.
+
+<p align="center">
+  <img src="docs/images/schematic.png" alt="KiCad schematic of the MP3 player PCB" width="860">
+</p>
 
 ### Wiring
 
@@ -188,7 +207,9 @@ Pseudo-Vinyl-MP3-Player/
 ├── README.md                # This file — architecture + build guide
 ├── docs/
 │   ├── PRD.md               # Product Requirements Document
-│   └── USER_GUIDE.md        # End-user guide (controls, pairing, troubleshooting)
+│   ├── USER_GUIDE.md        # End-user guide (controls, pairing, troubleshooting)
+│   └── images/              # Enclosure renders and schematic
+├── CAD/                     # Fusion 360 assembly (.f3z) and printable STLs
 ├── firmware/                # PlatformIO project (ESP32-WROOM-32)
 │   ├── platformio.ini
 │   └── src/                 # Modules described above

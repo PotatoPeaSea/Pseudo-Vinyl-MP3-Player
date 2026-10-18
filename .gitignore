@@ -26,3 +26,9 @@ dist/
 venv/
 .venv/
 .env
+
+# KiCad
+*.lck
+**/.history/
+**/_restore_backup*/
+**/_autosave-*

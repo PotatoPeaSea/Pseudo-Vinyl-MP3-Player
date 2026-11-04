@@ -4,6 +4,14 @@ v2 is a separate KiCad project. The v1 project in `../MP3PlayerPCB/` is left unt
 
 ![assembly](renders/iso_assembly.png)
 
+| Top | Bottom |
+|---|---|
+| ![top](renders/top_board.png) | ![bottom](renders/bottom_board.png) |
+
+![iso board](renders/iso_board.png)
+
+![schematic](renders/schematic.png)
+
 ## What's on the board
 
 | Ref | Part | Notes |

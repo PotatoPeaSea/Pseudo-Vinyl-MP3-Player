@@ -6,6 +6,10 @@ A portable, battery-powered MP3 player built on the **ESP32-WROVER N4R8** that s
 ![Platform](https://img.shields.io/badge/platform-ESP32--WROVER--N4R8-blue)
 ![Framework](https://img.shields.io/badge/framework-Arduino%20%2B%20PlatformIO-teal)
 
+<p align="center">
+  <img src="docs/images/enclosure-assembled.png" alt="3D render of the Pseudo Vinyl MP3 Player enclosure: dark case, tan lid with a round display window, two gold arrow buttons" width="640">
+</p>
+
 > [!NOTE]
 > **Why the classic ESP32 and not the S3?** The project originally targeted the ESP32-S3, but the S3 only has BLE — **no Bluetooth Classic**, which A2DP audio streaming requires. The original ESP32 is the only chip in the family that can act as an A2DP source. The board started on a **WROOM-32** (no PSRAM, a hard ~250–290KB working-heap budget — see [`docs/MEMORY.md`](docs/MEMORY.md) for everything that constraint drove) and later moved to a **WROVER N4R8**, same classic-ESP32 die plus **8MB PSRAM**, which is now the current hardware target. Audio output is **Bluetooth-only** — the wired PCM5102 DAC path from early prototyping was removed once the BT stack needed the RAM it occupied, and hasn't come back now that PSRAM is available (out of scope, not a technical blocker).
 
@@ -43,6 +47,35 @@ A portable, battery-powered MP3 player built on the **ESP32-WROVER N4R8** that s
 | Encoder | KY-040 rotary encoder | GPIO |
 | Buttons | 3× tactile switches | GPIO |
 | Battery | 3.7V LiPo + TP4056 USB-C charger | — |
+
+### Enclosure and PCB
+
+The enclosure is a three-part 3D print designed in Fusion 360: a case, a lid with a window for the round display, and separate arrow buttons. The source assembly (`.f3z`) and printable STLs are in [`CAD/`](CAD/).
+
+<p align="center">
+  <img src="docs/images/enclosure-exploded.png" alt="Exploded view: buttons, lid and case separated vertically" width="420">
+  <img src="docs/images/enclosure-top.png" alt="Top view: two triangular buttons and a centre hole beside the round display window" width="420">
+</p>
+
+The custom PCB is designed in KiCad 10. **[`MP3PlayerPCB_v2/`](MP3PlayerPCB_v2/)** is the current board: an AI-Thinker ESP32-CAM carrier with the GC9A01 display, a PCF8574 input expander for the encoder and buttons, and an AP2112K 3.3 V regulator, fully routed on 2 layers (68.4 x 38.5 mm). See its [README](MP3PlayerPCB_v2/README.md) for the pin map, verification results and enclosure fit notes.
+
+<p align="center">
+  <img src="MP3PlayerPCB_v2/renders/iso_board.png" alt="3D render of the v2 PCB, isometric view" width="640">
+</p>
+<p align="center">
+  <img src="MP3PlayerPCB_v2/renders/top_board.png" alt="v2 PCB top side" width="420">
+  <img src="MP3PlayerPCB_v2/renders/bottom_board.png" alt="v2 PCB bottom side" width="420">
+</p>
+
+<p align="center">
+  <img src="MP3PlayerPCB_v2/renders/schematic.png" alt="KiCad schematic of the v2 main board" width="860">
+</p>
+
+The earlier v1 project ([`MP3PlayerPCB/`](MP3PlayerPCB/)) is kept for reference. Its schematic covers the MCU module, the GC9A01 display connector, the next/previous buttons and rotary encoder, and on-board TP4056 LiPo charging with charge and standby LEDs; v2 moves charging to an off-board TP4056 module.
+
+<p align="center">
+  <img src="docs/images/schematic.png" alt="KiCad schematic of the v1 PCB" width="860">
+</p>
 
 ### Wiring
 
@@ -206,13 +239,16 @@ Pseudo-Vinyl-MP3-Player/
 │   ├── PRD.md               # Product Requirements Document (WROOM-32 prototype era — pins/memory table not updated for the WROVER move)
 │   ├── USER_GUIDE.md        # End-user guide (controls, pairing, troubleshooting)
 │   ├── MEMORY.md            # Canonical hardware bring-up log: every RAM/BT/audio failure found and fixed, with root causes
-│   └── HANDOFF.md           # Status of in-flight / recently-implemented-but-not-hardware-verified work
+│   ├── HANDOFF.md           # Status of in-flight / recently-implemented-but-not-hardware-verified work
+│   └── images/              # Enclosure renders and schematic
+├── CAD/                     # Fusion 360 assembly (.f3z) and printable STLs
 ├── firmware/                # PlatformIO project (ESP32-WROVER N4R8)
 │   ├── platformio.ini
 │   └── src/                 # Modules described above
 ├── tools/
 │   └── prescale_art/        # Album art pre-scaler (CLI + GUI)
-└── MP3PlayerPCB/            # KiCad PCB design (Phase 3)
+├── MP3PlayerPCB/            # KiCad PCB design, v1
+└── MP3PlayerPCB_v2/         # KiCad PCB design, v2 (ESP32-CAM main board, routed)
 ```
 
 ## License

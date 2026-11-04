@@ -1,5 +1,6 @@
 @echo off
 title Pseudo Vinyl - Album Art Converter
+cd /d "%~dp0"
 echo.
 echo  ========================================
 echo   Pseudo Vinyl - Album Art Converter

@@ -1,22 +1,27 @@
 /**
  * Pseudo Vinyl MP3 Player — Firmware
- * Board: ESP32-WROOM-32 (classic ESP32, BT Classic A2DP source)
+ * Board: ESP32-WROVER N4R8 (classic ESP32 + 8MB PSRAM, BT Classic A2DP source)
  *
  * Entry point: initializes all peripherals and spawns FreeRTOS tasks.
  *
  * Task layout (dual-core):
- *   Core 0: audio_task   — MP3 decode + output feed (BT stack also lives here)
- *   Core 1: ui_task      — LVGL display refresh (~60fps)
- *   Core 1: input_task   — Button/encoder polling (5ms)
+ *   Core 0: Bluetooth ONLY (controller + Bluedroid host + SBC encode).
+ *           Our tasks stay off it: SD/decode flash-cache pressure on core 0
+ *           contributed to L2CAP congestion → A2DP stutter/stalls.
+ *   Core 1: audio_task   — MP3 decode + output feed (prio 3)
+ *   Core 1: input_task   — Button/encoder polling (5ms, prio 2)
+ *   Core 1: ui_task      — LVGL display refresh (~60fps, prio 1)
  *
  * Controls:
  *   Now Playing: PLAY=play/pause, NEXT/PREV=track, encoder=volume,
- *                encoder press=cycle play mode
+ *                encoder press=back to song list
  *   Menus:       encoder=move focus, PLAY=select, NEXT/PREV=switch screen,
- *                encoder press=back
+ *                encoder press=back (song list press = to Now Playing)
+ *   Play mode:   serial "mode" command only (no physical control yet)
  */
 
 #include <Arduino.h>
+#include <esp_heap_caps.h>  // heap_caps_get_largest_free_block (PSRAM report)
 #include <lvgl.h>   // LV_KEY_* codes for UI::sendKey
 #include "config.h"
 #include "display/display_manager.h"
@@ -25,6 +30,7 @@
 #include "storage/sd_manager.h"
 #include "audio/audio_manager.h"
 #include "bluetooth/bt_manager.h"
+#include "debug/debug_console.h"
 
 // ── Task Handles ────────────────────────────────────────────
 static TaskHandle_t audioTaskHandle = nullptr;
@@ -33,17 +39,69 @@ static TaskHandle_t inputTaskHandle = nullptr;
 
 // ── Song library (shared state) ─────────────────────────────
 static std::vector<SongInfo> songs;
+static std::vector<PlaylistInfo> playlists;   // "All Songs" + one per top-level SD folder
 
 // ═══════════════════════════════════════════════════════════
-// AUDIO TASK (Core 0) — MP3 decode + output feed
+// AUDIO TASK (Core 1) — MP3 decode + output feed
 // ═══════════════════════════════════════════════════════════
 void audioTask(void *param) {
-    Serial.println("[Task] Audio task started on Core 0");
+    Serial.println("[Task] Audio task started on Core 1");
 
     for (;;) {
         AudioMgr::loop();
         vTaskDelay(pdMS_TO_TICKS(1));   // Yield briefly
     }
+}
+
+// SD mount + song scan now run once during setup(), right after BT/audio
+// init — see the boot-order comment there. This used to be deferred until
+// a speaker connected (BtMgr::isStreaming()), because on the no-PSRAM
+// WROOM-32 mounting FATFS fragmented the heap down to a ~20KB largest block,
+// which starved the A2DP connection handshake (~50KB contiguous, transient).
+// On the WROVER, hardware bring-up (docs/MEMORY.md) measured largest=81908
+// AFTER BT init + SD mount + a full 15-song list — comfortably above that
+// 50KB need, with no connect-time race left to lose since the mount now
+// happens once, well before any speaker connects. Not yet re-verified on
+// hardware with THIS ordering (mount always runs, not gated on a connect
+// event) — watch the same free=/largest= log lines after flashing.
+static void mountStorageAtBoot() {
+    Serial.printf("[Storage] Mounting SD (free=%u largest=%u)\n",
+                  ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+    if (Storage::init()) {
+        playlists = Storage::scanPlaylists("/");
+        songs = Storage::scanMusic("/");
+        // All take a pointer to the single app-lifetime vectors — no copies
+        AudioMgr::setPlaylist(&songs);
+        UI::setPlaylists(&playlists);
+        UI::setSongList(&songs);
+        Serial.printf("[Storage] %d songs, %d playlist(s) loaded (free=%u largest=%u)\n",
+                      songs.size(), playlists.size(), ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+    } else {
+        Serial.println("[Storage] SD mount FAILED");
+    }
+}
+
+// Applies a playlist switch requested from the Playlists screen. Rescanning
+// SD + repointing AudioMgr/UI at a new song set is too heavy for an LVGL
+// event callback, so this runs from the UI task (see UI::pollPlaylistSelect).
+static void maybeSwitchPlaylist() {
+    int idx = UI::pollPlaylistSelect();
+    if (idx < 0 || idx >= (int)playlists.size()) return;
+
+    const PlaylistInfo &pl = playlists[idx];
+    Serial.printf("[Storage] Switching to playlist '%s' (%s)\n", pl.name.c_str(), pl.path.c_str());
+
+    // Stop playback before the swap: setPlaylist() alone resets currentIdx
+    // but doesn't close the open file, and `songs` is reassigned in place
+    // (same vector, new contents) — a still-playing index from the old
+    // playlist would otherwise point at an unrelated song in the new one.
+    AudioMgr::stop();
+    songs = Storage::scanMusic(pl.path.c_str());
+    AudioMgr::setPlaylist(&songs);
+    UI::setSongList(&songs);
+    UI::showScreen(Screen::SONG_LIST);
+    Serial.printf("[Storage] %d songs loaded from '%s' (free=%u largest=%u)\n",
+                  songs.size(), pl.name.c_str(), ESP.getFreeHeap(), ESP.getMaxAllocHeap());
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -56,6 +114,8 @@ void uiTask(void *param) {
     uint32_t lastBtPoll = 0;
 
     for (;;) {
+        maybeSwitchPlaylist();   // applies a pending Playlists-screen selection, if any
+
         // Update now-playing info
         const SongInfo *current = AudioMgr::currentSong();
         UI::setNowPlaying(current, AudioMgr::isPlaying());
@@ -76,7 +136,7 @@ void uiTask(void *param) {
             if (conn != lastBtConnected) {
                 lastBtConnected = conn;
                 UI::setBtStatus(conn ? ("Connected: " + BtMgr::connectedName())
-                                     : (BtMgr::isStarted() ? "Searching..." : "Off (wired mode)"));
+                                     : (BtMgr::isStarted() ? "Searching..." : "Off"));
             }
         }
 
@@ -92,16 +152,17 @@ void uiTask(void *param) {
 // INPUT TASK (Core 1) — Buttons + encoder → events
 // ═══════════════════════════════════════════════════════════
 static void handleMenuScreenCycle(bool forward) {
-    // Menu screen order: SONG_LIST → SETTINGS → BLUETOOTH → NOW_PLAYING
+    // Menu screen order: SONG_LIST → PLAYLISTS → SETTINGS → BLUETOOTH → NOW_PLAYING
     static const Screen order[] = {
-        Screen::SONG_LIST, Screen::SETTINGS, Screen::BLUETOOTH, Screen::NOW_PLAYING
+        Screen::SONG_LIST, Screen::PLAYLISTS, Screen::SETTINGS, Screen::BLUETOOTH, Screen::NOW_PLAYING
     };
+    const int n = sizeof(order) / sizeof(order[0]);
     Screen cur = UI::activeScreen();
     int idx = 0;
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < n; i++) {
         if (order[i] == cur) { idx = i; break; }
     }
-    idx = (idx + (forward ? 1 : 3)) % 4;
+    idx = (idx + (forward ? 1 : n - 1)) % n;
     UI::showScreen(order[idx]);
 }
 
@@ -110,6 +171,7 @@ void inputTask(void *param) {
 
     for (;;) {
         Input::poll();
+        DebugConsole::poll();   // serial commands inject events alongside hardware
 
         while (Input::hasEvent()) {
             InputEvent evt = Input::getEvent();
@@ -165,14 +227,20 @@ void inputTask(void *param) {
                     break;
 
                 case InputEvent::ENC_PRESS:
-                    if (onNowPlaying) {
-                        AudioMgr::cyclePlayMode();
-                    } else if (screen == Screen::SONG_LIST) {
+                    if (screen == Screen::SONG_LIST) {
                         UI::showScreen(Screen::NOW_PLAYING);
                     } else {
-                        // Back to song list from Settings/Bluetooth
+                        // Back to song list from Now Playing/Settings/Bluetooth
                         UI::showScreen(Screen::SONG_LIST);
                     }
+                    break;
+
+                case InputEvent::MODE_CYCLE:
+                    AudioMgr::cyclePlayMode();
+                    break;
+
+                case InputEvent::TONE_TEST:
+                    AudioMgr::toggleToneTest();
                     break;
 
                 default:
@@ -193,43 +261,86 @@ void setup() {
     delay(500);
     Serial.println("\n═══════════════════════════════════");
     Serial.println("  Pseudo Vinyl MP3 Player v2.0");
-    Serial.println("  ESP32-WROOM-32 + A2DP");
+    Serial.println("  ESP32-WROVER N4R8 + A2DP");
     Serial.println("═══════════════════════════════════\n");
+
+    Serial.printf("[Heap] boot start: free=%u largest=%u\n",
+                  ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+
+    // PSRAM is the whole reason this board was chosen — if it did not
+    // initialize, every heap figure below reverts to the old razor-thin
+    // WROOM budget and the failures in docs/MEMORY.md come straight back.
+    // Fail loudly rather than limping.
+    if (psramFound()) {
+        Serial.printf("[PSRAM] ok: size=%u free=%u largest=%u\n",
+                      ESP.getPsramSize(), ESP.getFreePsram(),
+                      heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM));
+    } else {
+        Serial.println("[PSRAM] *** NOT FOUND *** — running on internal SRAM "
+                       "only. Check BOARD_HAS_PSRAM and that this module is "
+                       "really a WROVER.");
+    }
 
     // 1. Display
     Display::init();
     UI::init();
     Serial.println("[Boot] Display ready");
+    Serial.printf("[Heap] after display+UI: free=%u largest=%u\n",
+                  ESP.getFreeHeap(), ESP.getMaxAllocHeap());
 
-    // 2. SD Card
-    if (Storage::init()) {
-        songs = Storage::scanMusic("/");
-        AudioMgr::setPlaylist(songs);
-        UI::setSongList(songs);
-        Serial.printf("[Boot] %d songs loaded\n", songs.size());
-    } else {
-        Serial.println("[Boot] WARNING: No SD card!");
-    }
-
-    // 3. Input
+    // 2. Input
     Input::init();
+    DebugConsole::init();
 
-    // 4. Bluetooth (target device from NVS) + audio pipeline.
+    // 3. Bluetooth (target device from NVS) + audio pipeline.
     //    AudioMgr::init starts A2DP if the saved output mode is Bluetooth.
+    //    Done BEFORE the SD mount so the Classic-BT / A2DP stack (needs
+    //    ~120KB to init) gets the heap while it's still plentiful — the
+    //    FATFS mount retains ~80KB and would otherwise starve it.
+    Serial.printf("[Heap] before BT/audio: free=%u largest=%u\n",
+                  ESP.getFreeHeap(), ESP.getMaxAllocHeap());
     BtMgr::init();
     AudioMgr::init();
-    UI::setOutputModeLabel(AudioMgr::getOutputMode());
-    UI::setBtStatus(BtMgr::isStarted() ? "Searching..." : "Off (wired mode)");
+    UI::setBtStatus(BtMgr::isStarted() ? "Searching..." : "Off");
+    Serial.printf("[Heap] after BT/audio: free=%u largest=%u\n",
+                  ESP.getFreeHeap(), ESP.getMaxAllocHeap());
 
-    // 5. Spawn FreeRTOS tasks
-    xTaskCreatePinnedToCore(audioTask, "audio", 8192, nullptr, 3, &audioTaskHandle, 0);
-    xTaskCreatePinnedToCore(uiTask,    "ui",    8192, nullptr, 1, &uiTaskHandle,    1);
-    xTaskCreatePinnedToCore(inputTask, "input", 4096, nullptr, 2, &inputTaskHandle, 1);
+    // 4. Mount SD + scan the library now, still in setup() — songs must be
+    //    browsable/playable at boot, not only after a speaker connects. Runs
+    //    AFTER BT/audio init (step 3) so Bluedroid claims its ~120KB while
+    //    the heap is still uncontested; FATFS mounting after that point measured
+    //    largest=81908 on hardware (docs/MEMORY.md), well clear of the ~50KB
+    //    the A2DP handshake needs later when a speaker actually connects.
+    mountStorageAtBoot();
+    Serial.printf("[Heap] after storage mount: free=%u largest=%u\n",
+                  ESP.getFreeHeap(), ESP.getMaxAllocHeap());
 
-    Serial.println("[Boot] All tasks launched\n");
+    // 5. Spawn FreeRTOS tasks. Heap is tight after the BT stack + FATFS mount,
+    //    and each stack must come from a single contiguous block. Create the
+    //    small input task FIRST — it carries both the hardware controls and the
+    //    serial debug console, so it must not be the one starved of a stack.
+    //    Verify every task actually starts (a silent failure here previously
+    //    killed all input).
+    BaseType_t ok;
+    ok = xTaskCreatePinnedToCore(inputTask, "input", 3072, nullptr, 2, &inputTaskHandle, 1);
+    if (ok != pdPASS) Serial.println("[Boot] ERROR: input task failed to start!");
+    ok = xTaskCreatePinnedToCore(uiTask,    "ui",    8192, nullptr, 1, &uiTaskHandle,    1);
+    if (ok != pdPASS) Serial.println("[Boot] ERROR: ui task failed to start!");
+    // Audio on core 1 WITH the UI, not core 0: the BT controller + host +
+    // SBC encoder get core 0 to themselves. Decode at prio 3 preempts the
+    // UI's LVGL rendering, which is the right priority order for a music
+    // player (dropped frames beat dropped audio).
+    ok = xTaskCreatePinnedToCore(audioTask, "audio", 6144, nullptr, 3, &audioTaskHandle, 1);
+    if (ok != pdPASS) Serial.println("[Boot] ERROR: audio task failed to start!");
+
+    Serial.printf("[Boot] Tasks launched, free heap=%u\n", ESP.getFreeHeap());
+
+    // 6. setup() runs on the Arduino loopTask, which carries an 8KB stack.
+    //    Everything lives in our own tasks, so delete it — loop() below
+    //    never runs and the stack + TCB return to the heap.
+    vTaskDelete(nullptr);
 }
 
 void loop() {
-    // All work is done in FreeRTOS tasks
-    vTaskDelay(pdMS_TO_TICKS(1000));
+    // Never runs — the loopTask deletes itself at the end of setup()
 }

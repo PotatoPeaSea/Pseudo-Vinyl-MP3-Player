@@ -15,7 +15,9 @@ enum class InputEvent : uint8_t {
     BTN_PREV,           // Previous track button pressed
     ENC_CW,             // Encoder rotated clockwise (volume up)
     ENC_CCW,            // Encoder rotated counter-clockwise (volume down)
-    ENC_PRESS,          // Encoder shaft pressed (cycle mode)
+    ENC_PRESS,          // Encoder shaft pressed (back to song list)
+    MODE_CYCLE,         // Cycle play mode (debug console only — no physical control yet)
+    TONE_TEST,          // Toggle diagnostic sine tone (debug console only)
 };
 
 namespace Input {
@@ -30,4 +32,7 @@ namespace Input {
 
     /// Check if there are pending events
     bool hasEvent();
+
+    /// Inject a synthetic event (used by the debug serial console)
+    void inject(InputEvent evt);
 }

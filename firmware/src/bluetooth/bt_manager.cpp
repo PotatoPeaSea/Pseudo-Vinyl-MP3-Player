@@ -2,6 +2,7 @@
 #include "../config.h"
 #include <BluetoothA2DPSource.h>
 #include <Preferences.h>
+#include <esp_bt.h>   // esp_bt_sleep_disable
 #include <freertos/FreeRTOS.h>
 #include <freertos/ringbuf.h>
 
@@ -13,6 +14,7 @@ static Preferences prefs;
 static String targetName;
 static volatile bool started = false;
 static volatile bool connected = false;
+static volatile bool streaming = false;   // A2DP media stream running
 static String connectedDev;
 
 static std::vector<BtDevice> found;
@@ -21,8 +23,31 @@ static volatile bool listDirty = false;
 
 // ── A2DP callbacks (run on BT stack task) ───────────────────
 
+// Stutter diagnosis counters, logged rate-limited from the callbacks.
+// Underruns = consumer outran the producer (zero-fill went to the speaker).
+// Send timeouts = producer outran the consumer for >500ms (PCM was dropped).
+// Underruns while playing → jitter or a decode rate below 44.1k stereo;
+// see docs/MEMORY.md.
+static volatile uint32_t underrunBytes = 0;
+static volatile uint32_t sendTimeouts = 0;
+static volatile uint32_t lastProducerWrite = 0;   // millis() of last writeAudio
+
+// Stall watchdog: Bluedroid's A2DP source stops requesting data on L2CAP
+// congestion; sometimes the un-congest event never arrives and the stream
+// is dead until reboot ("media state STARTED" but zero pulls — seen on
+// hardware with a pure tone, no SD/decode in the path). After ~4s of
+// continuous send timeouts we force a disconnect; discovery then finds the
+// target again and the connect path rebuilds the media stream fresh.
+static volatile uint16_t consecTimeouts = 0;
+static volatile bool reconnectPending = false;
+
 // Feed PCM to the BT stack; zero-fill on underrun so the stream never stalls
 static int32_t dataCallback(uint8_t *data, int32_t len) {
+    // The stack can fire one last request with a NULL buffer during
+    // disconnect teardown — writing into it crashed (StoreProhibited @0)
+    // when the stall watchdog forced a disconnect
+    if (!data || len <= 0) return 0;
+
     size_t got = 0;
     while (got < (size_t)len) {
         size_t itemSize = 0;
@@ -34,6 +59,21 @@ static int32_t dataCallback(uint8_t *data, int32_t len) {
     }
     if (got < (size_t)len) {
         memset(data + got, 0, len - got);
+
+        // Only count as an underrun if the producer wrote recently —
+        // draining silence while nothing is playing is expected, not a fault
+        uint32_t now = millis();
+        if (now - lastProducerWrite < 1000) {
+            underrunBytes += len - got;
+            static uint32_t lastLog = 0;
+            if (now - lastLog > 2000) {
+                lastLog = now;
+                // 176400 bytes/s at 44.1k stereo → /176 ≈ ms of silence inserted
+                Serial.printf("[BT] underrun: %u bytes (~%u ms) zero-filled in last 2s\n",
+                              underrunBytes, underrunBytes / 176);
+                underrunBytes = 0;
+            }
+        }
     }
     return len;
 }
@@ -45,7 +85,7 @@ static bool ssidCallback(const char *ssid, esp_bd_addr_t address, int rssi) {
     for (auto &d : found) {
         if (d.name == ssid) { d.rssi = rssi; known = true; break; }
     }
-    if (!known) {
+    if (!known && found.size() < MAX_BT_DEVICES) {
         found.push_back({String(ssid), rssi});
         listDirty = true;
     }
@@ -56,12 +96,55 @@ static bool ssidCallback(const char *ssid, esp_bd_addr_t address, int rssi) {
 
 static void connectionStateChanged(esp_a2d_connection_state_t state, void *) {
     connected = (state == ESP_A2D_CONNECTION_STATE_CONNECTED);
-    if (connected) {
-        connectedDev = targetName;
-        Serial.printf("[BT] Connected to %s\n", connectedDev.c_str());
-    } else {
-        Serial.println("[BT] Disconnected");
+    Serial.printf("[BT] state=%d free=%u largest=%u\n", (int)state,
+                  ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+    switch (state) {
+        case ESP_A2D_CONNECTION_STATE_CONNECTED:
+            connectedDev = targetName;
+            Serial.printf("[BT] Connected to %s\n", connectedDev.c_str());
+            // Media start is left to the library's 10s heartbeat — do NOT
+            // kick esp_a2d_media_ctrl(CHECK_SRC_RDY) from here. This
+            // callback runs before the library's state machine reaches
+            // CONNECTED, and the connecting-state handler re-issues a
+            // CHECK on any media ACK: the two overlapping CHECK→START
+            // sequences intermittently left btc_a2dp_source "started"
+            // with a dead data path (3 of 4 kicked boots on hardware).
+            // The heap-safety reason for the kick is gone anyway: the SD
+            // mount now runs once in setup(), well before any connection —
+            // by the time a connect happens FATFS has already settled, so
+            // the heartbeat-driven start races nothing (no concurrent mount
+            // to starve it, unlike the old connect-gated mount).
+            break;
+        case ESP_A2D_CONNECTION_STATE_CONNECTING:
+            Serial.println("[BT] Connecting...");
+            break;
+        case ESP_A2D_CONNECTION_STATE_DISCONNECTING:
+            Serial.println("[BT] Disconnecting...");
+            break;
+        default:
+            streaming = false;   // no media stream without a connection
+            Serial.println("[BT] Disconnected");
+            // Stall-watchdog recovery: with auto_reconnect off the library
+            // does NOT rescan after a disconnect, so restart discovery
+            // ourselves — the ssid_callback reconnects to the saved target
+            // and the CONNECTED case above kicks a fresh media stream.
+            if (reconnectPending) {
+                reconnectPending = false;
+                Serial.println("[BT] Restarting discovery to recover the stream");
+                esp_bt_gap_start_discovery(ESP_BT_INQ_MODE_GENERAL_INQUIRY, 10, 0);
+            }
+            break;
     }
+}
+
+// The stack only pulls from the ring buffer while audio state is STARTED
+// (2). If this never logs 2 after a connect, the media-start handshake
+// failed — playback will be silent with the ring buffer stuck full.
+static void audioStateChanged(esp_a2d_audio_state_t state, void *) {
+    streaming = (state == ESP_A2D_AUDIO_STATE_STARTED);
+    Serial.printf("[BT] audio state=%d%s free=%u largest=%u\n", (int)state,
+                  streaming ? " (streaming)" : "",
+                  ESP.getFreeHeap(), ESP.getMaxAllocHeap());
 }
 
 // ── Public API ──────────────────────────────────────────────
@@ -90,8 +173,32 @@ void BtMgr::start() {
     a2dp.set_ssid_callback(ssidCallback);
     a2dp.set_data_callback(dataCallback);
     a2dp.set_on_connection_state_changed(connectionStateChanged);
-    a2dp.set_auto_reconnect(true);
+    a2dp.set_on_audio_state_changed(audioStateChanged);
+    // Auto-reconnect OFF: with a saved address the library hammers a direct
+    // connect (retries x1000) and never runs an inquiry scan, so no devices
+    // ever appear in the UI list. We instead rely on continuous discovery +
+    // the ssid_callback to auto-connect when the target is seen, which keeps
+    // the scan list populated.
+    a2dp.set_auto_reconnect(false);
+    // Secure Simple Pairing ("Just Works") — required by modern BT speakers
+    // (JBL, etc.). Without it the ESP32 falls back to legacy PIN pairing.
+    a2dp.set_ssp_enabled(true);
     a2dp.start();
+
+    // Disable BT modem sleep (sniff-mode power save). With it on, the radio
+    // periodically idles and source-mode A2DP audio chops at the speaker
+    // even though the PCM pipeline is healthy — hardware showed stutter
+    // with ZERO ring-buffer underruns/timeouts, i.e. the loss was after
+    // the data callback, on the radio link.
+    esp_err_t slp = esp_bt_sleep_disable();
+    Serial.printf("[BT] modem sleep disabled: %s\n", esp_err_to_name(slp));
+
+    // Max BR/EDR TX power (+9dBm; default is several dB lower). A marginal
+    // link drops A2DP media packets after our callback with no error we can
+    // see — raising TX power is the only link-robustness knob available.
+    // Must be called after the controller is enabled (a2dp.start()).
+    esp_err_t txp = esp_bredr_tx_power_set(ESP_PWR_LVL_P9, ESP_PWR_LVL_P9);
+    Serial.printf("[BT] TX power max: %s\n", esp_err_to_name(txp));
 
     started = true;
     Serial.println("[BT] A2DP source started, discovering...");
@@ -102,6 +209,7 @@ void BtMgr::stop() {
     a2dp.end(false);   // keep BT controller memory so we can restart
     started = false;
     connected = false;
+    streaming = false;
     Serial.println("[BT] A2DP source stopped");
 }
 
@@ -113,11 +221,16 @@ bool BtMgr::isConnected() {
     return connected;
 }
 
+bool BtMgr::isStreaming() {
+    return streaming;
+}
+
 String BtMgr::connectedName() {
     return connected ? connectedDev : String("");
 }
 
 void BtMgr::setTarget(const String &name) {
+    if (name == targetName) return;   // no change — avoid redundant NVS writes
     targetName = name;
     prefs.putString("target", name);
     Serial.printf("[BT] Target set: %s\n", name.c_str());
@@ -149,8 +262,28 @@ size_t BtMgr::writeAudio(const uint8_t *data, size_t len) {
     if (!started || !connected || !audioRb) {
         return len;   // drop silently; caller gates on isConnected()
     }
+    lastProducerWrite = millis();
     if (xRingbufferSend(audioRb, data, len, pdMS_TO_TICKS(500)) == pdTRUE) {
+        consecTimeouts = 0;
         return len;
+    }
+    // Full buffer for 500ms straight = consumer stalled; this PCM is lost
+    sendTimeouts++;
+    static uint32_t lastLog = 0;
+    uint32_t now = millis();
+    if (now - lastLog > 2000) {
+        lastLog = now;
+        Serial.printf("[BT] ringbuf send timeout x%u (consumer stalled, PCM dropped)\n",
+                      sendTimeouts);
+        sendTimeouts = 0;
+    }
+    // ~4s of continuous stall → the congestion never cleared; reconnect
+    // (see the stall-watchdog note at the top of this file)
+    if (++consecTimeouts >= 8 && connected) {
+        consecTimeouts = 0;
+        reconnectPending = true;
+        Serial.println("[BT] Media stream stalled >4s — forcing reconnect");
+        a2dp.disconnect();
     }
     return 0;
 }

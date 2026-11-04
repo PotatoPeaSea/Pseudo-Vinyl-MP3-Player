@@ -143,7 +143,7 @@ class PseudoVinylConverter:
         ).pack(anchor="w")
 
         tk.Label(
-            title_frame, text="Album Art Converter",
+            title_frame, text="SD-Card Music Toolkit",
             font=(FONT_FAMILY, 11, "italic"),
             bg=C["bg"], fg=C["text_dim"]
         ).pack(anchor="w")
@@ -151,6 +151,55 @@ class PseudoVinylConverter:
         # Decorative line
         self._draw_ornament(main)
 
+        # ── Tabbed interface ─────────────────────────────────────────────────
+        self._style_notebook()
+        notebook = ttk.Notebook(main, style="Vinyl.TNotebook")
+        notebook.pack(fill="both", expand=True)
+
+        art_tab = tk.Frame(notebook, bg=C["bg"])
+        notebook.add(art_tab, text="  Album Art  ")
+        self._build_art_tab(art_tab)
+
+        # Spotify Sync tab — imported lazily to break the circular import
+        # (spotify_sync_gui imports the palette/fonts from this module). If the
+        # optional deps aren't installed, the tab degrades to a message rather
+        # than breaking the whole app.
+        try:
+            from spotify_sync_gui import SpotifySyncTab
+            self.spotify_tab = SpotifySyncTab(notebook, self.root)
+            notebook.add(self.spotify_tab.frame, text="  Spotify Sync  ")
+        except Exception as e:
+            err_tab = tk.Frame(notebook, bg=C["bg"])
+            tk.Label(
+                err_tab,
+                text=f"Spotify Sync unavailable:\n{e}\n\n"
+                     f"Install the extra dependencies:\n"
+                     f"  pip install -r requirements.txt",
+                bg=C["bg"], fg=C["error"], font=(FONT_FAMILY, 10),
+                justify="left", padx=20, pady=20,
+            ).pack(anchor="w")
+            notebook.add(err_tab, text="  Spotify Sync  ")
+
+    def _style_notebook(self):
+        style = ttk.Style()
+        try:
+            style.theme_use("default")
+        except tk.TclError:
+            pass
+        style.configure("Vinyl.TNotebook", background=C["bg"], borderwidth=0)
+        style.configure(
+            "Vinyl.TNotebook.Tab",
+            background=C["surface"], foreground=C["text_dim"],
+            padding=(16, 6), font=(FONT_FAMILY, 10, "bold italic"),
+            borderwidth=0,
+        )
+        style.map(
+            "Vinyl.TNotebook.Tab",
+            background=[("selected", C["accent"])],
+            foreground=[("selected", C["text_dark"])],
+        )
+
+    def _build_art_tab(self, main):
         # ── Drop Zone (vinyl sleeve style) ───────────────────────────────────
         self.drop_frame = tk.Frame(
             main, bg=C["drop_bg"],

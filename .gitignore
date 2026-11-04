@@ -24,4 +24,13 @@ __pycache__/
 *.egg-info/
 dist/
 venv/
+.venv/
 .env
+
+# KiCad
+*.lck
+**/.history/
+**/_restore_backup*/
+**/_autosave-*
+# raw source models (the baked *_placed.stpZ copies are tracked)
+MP3PlayerPCB_v2/3d/*.step

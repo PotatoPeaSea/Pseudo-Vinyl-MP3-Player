@@ -117,3 +117,7 @@ InputEvent Input::getEvent() {
 bool Input::hasEvent() {
     return qTail != qHead;
 }
+
+void Input::inject(InputEvent evt) {
+    pushEvent(evt);
+}

@@ -1,0 +1,3 @@
+(sym_lib_table
+  (lib (name "MP3Player")(type "KiCad")(uri "${KIPRJMOD}/MP3Player.kicad_sym")(options "")(descr "Project parts"))
+)

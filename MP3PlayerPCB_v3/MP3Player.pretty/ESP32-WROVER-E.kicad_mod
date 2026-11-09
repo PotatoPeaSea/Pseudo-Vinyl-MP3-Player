@@ -76,5 +76,5 @@
 (pad "39" thru_hole circle (at -1.5 0.94) (size 0.6 0.6) (drill 0.3) (layers "*.Cu") (uuid "55bdbe18-4f91-5351-9e3a-898f6aff90bc"))
 (pad "39" smd rect (at -0.1 0.94) (size 0.9 0.9) (layers "F.Cu" "F.Paste" "F.Mask") (uuid "8c533fd5-c68d-530e-ac73-2403d5064baf"))
 (pad "39" thru_hole circle (at -0.1 0.94) (size 0.6 0.6) (drill 0.3) (layers "*.Cu") (uuid "c5e0352b-cd9b-509d-87d1-16180b3ec351"))
-(model "${KICAD10_3DMODEL_DIR}/RF_Module.3dshapes/ESP32-S2-WROVER.step" (offset (xyz 0 0 0)) (scale (xyz 1 1 1)) (rotate (xyz 0 0 0)))
+(model "${KICAD10_3DMODEL_DIR}/RF_Module.3dshapes/ESP32-WROOM-32E.step" (offset (xyz 0 0 0)) (scale (xyz 1 1.231 1)) (rotate (xyz 0 0 0)))
 )
